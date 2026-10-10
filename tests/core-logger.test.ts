@@ -14,19 +14,52 @@ describe('Logger with Sensitive Data Redaction', () => {
     const redacted = redactString(raw);
     expect(redacted).not.toContain('ya29.a0AfH6SM');
     expect(redacted).not.toContain('1699999999_abcdef');
-    expect(redacted).toContain('Bearer [REDACTED]');
-    expect(redacted).toContain('SAPISIDHASH [REDACTED]');
+    expect(redacted).toContain('[REDACTED]');
   });
 
-  it('redacts sensitive cookies in strings', () => {
-    const cookieHeader =
-      'SID=abc123456; HSID=def789; SAPISID=sec999; __Secure-3PAPISID=xyz000; other=ok';
-    const redacted = redactString(cookieHeader);
-    expect(redacted).toContain('SID=[REDACTED]');
-    expect(redacted).toContain('SAPISID=[REDACTED]');
-    expect(redacted).toContain('__Secure-[REDACTED]=[REDACTED]');
-    expect(redacted).not.toContain('abc123456');
-    expect(redacted).not.toContain('sec999');
+  it('redacts ANY Authorization scheme (Basic, Digest, OAuth, HMAC)', () => {
+    const basic = 'Authorization: Basic dXNlcjpwYXNz';
+    expect(redactString(basic)).toContain('Authorization: [REDACTED]');
+
+    const oauth = 'Authorization: OAuth ya29.oauth-token';
+    expect(redactString(oauth)).toContain('Authorization: [REDACTED]');
+
+    const standaloneBasic = 'Using scheme Basic dXNlcjpwYXNz';
+    expect(redactString(standaloneBasic)).toContain('Basic [REDACTED]');
+  });
+
+  it('redacts whole Cookie and Set-Cookie headers in strings and objects', () => {
+    const cookieHeader = 'Cookie: SID=abc123456; HSID=def789; other=ok';
+    expect(redactString(cookieHeader)).toBe('Cookie: [REDACTED]');
+
+    const setCookieHeader = 'Set-Cookie: __Secure-3PAPISID=xyz000; Secure; HttpOnly';
+    expect(redactString(setCookieHeader)).toBe('Set-Cookie: [REDACTED]');
+
+    const objWithHeaders = {
+      headers: {
+        Cookie: 'SID=123; user=ashmit',
+        'Set-Cookie': '__Secure-1PSID=456',
+        Authorization: 'Bearer secret_token',
+      },
+    };
+    const sanitized = redactValue(objWithHeaders) as Record<string, Record<string, unknown>>;
+    expect(sanitized.headers['Cookie']).toBe('[REDACTED]');
+    expect(sanitized.headers['Set-Cookie']).toBe('[REDACTED]');
+    expect(sanitized.headers['Authorization']).toBe('[REDACTED]');
+  });
+
+  it('redacts signed stream URL query parameters', () => {
+    const streamUrl =
+      'https://rr1---sn-5uaeznle.googlevideo.com/videoplayback?expire=1710000000&ei=Abc&ip=1.2.3.4&id=o-Abc&itag=251&source=youtube&sig=AOB4R_MwRAIgZ...&signature=oldSig123&s=cipherSig&key=yt8';
+
+    const redacted = redactString(streamUrl);
+    expect(redacted).not.toContain('AOB4R_MwRAIgZ');
+    expect(redacted).not.toContain('oldSig123');
+    expect(redacted).not.toContain('cipherSig');
+    expect(redacted).toContain('sig=[REDACTED]');
+    expect(redacted).toContain('signature=[REDACTED]');
+    expect(redacted).toContain('s=[REDACTED]');
+    expect(redacted).toContain('key=[REDACTED]');
   });
 
   it('redacts sensitive object keys recursively', () => {

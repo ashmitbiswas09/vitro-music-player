@@ -31,15 +31,35 @@ const SENSITIVE_KEY_PATTERNS = [
   /key/i,
 ];
 
+const WHOLE_HEADER_PATTERNS: { regex: RegExp; replacement: string }[] = [
+  // Redact whole Cookie and Set-Cookie headers in strings
+  { regex: /(set-cookie:\s*)[^\r\n]+/gi, replacement: '$1[REDACTED]' },
+  { regex: /(cookie:\s*)[^\r\n]+/gi, replacement: '$1[REDACTED]' },
+  // Redact any Authorization header scheme in strings
+  { regex: /(authorization:\s*)[^\r\n]+/gi, replacement: '$1[REDACTED]' },
+];
+
 const SENSITIVE_STRING_PATTERNS: { regex: RegExp; replacement: string }[] = [
-  { regex: /Bearer\s+[\w\-.]+/gi, replacement: 'Bearer [REDACTED]' },
-  { regex: /SAPISIDHASH\s+[\w_]+/gi, replacement: 'SAPISIDHASH [REDACTED]' },
+  // Any authorization scheme keyword: Bearer, Basic, Digest, OAuth, SAPISIDHASH, HMAC, etc.
+  {
+    regex: /\b(Bearer|Basic|Digest|OAuth|SAPISIDHASH|HMAC)\s+[\w\-._~+/]+=*/gi,
+    replacement: '$1 [REDACTED]',
+  },
+  // Signed stream URL query parameters (sig, signature, s, key, token, auth)
+  {
+    regex: /([?&](?:sig|signature|s|key|token|auth)=)[^&"'\s\\]+/gi,
+    replacement: '$1[REDACTED]',
+  },
+  // Standalone cookie tokens
   { regex: /(SID|HSID|SSID|APISID|SAPISID|LOGIN_INFO)=[^;,\s]+/gi, replacement: '$1=[REDACTED]' },
   { regex: /__Secure-[^=]+=[^;,\s]+/gi, replacement: '__Secure-[REDACTED]=[REDACTED]' },
 ];
 
 export function redactString(input: string): string {
   let sanitized = input;
+  for (const { regex, replacement } of WHOLE_HEADER_PATTERNS) {
+    sanitized = sanitized.replace(regex, replacement);
+  }
   for (const { regex, replacement } of SENSITIVE_STRING_PATTERNS) {
     sanitized = sanitized.replace(regex, replacement);
   }
@@ -79,6 +99,14 @@ export function redactValue(val: unknown, seen = new WeakSet()): unknown {
 
     const result: Record<string, unknown> = {};
     for (const [key, propVal] of Object.entries(val as Record<string, unknown>)) {
+      // 1. Check for whole header keys (cookie, set-cookie, authorization)
+      const isWholeHeaderKey = /^(?:cookie|set-cookie|authorization)$/i.test(key);
+      if (isWholeHeaderKey) {
+        result[key] = '[REDACTED]';
+        continue;
+      }
+
+      // 2. Check for general sensitive keys
       const isSensitiveKey = SENSITIVE_KEY_PATTERNS.some((pattern) => pattern.test(key));
       if (isSensitiveKey) {
         if (typeof propVal === 'object' && propVal !== null && !Array.isArray(propVal)) {

@@ -45,7 +45,7 @@ coverage/
 
 # backend cache & temp
 .cache/
-cache/
+/cache/
 scratch/
 
 # sensitive data & credentials
@@ -54,5 +54,7 @@ scratch/
 *.tokens*
 *.auth*
 .env*
+fixtures/recorded/
+fixtures/raw/
 !fixtures/sanitized/
 

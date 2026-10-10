@@ -1,5 +1,8 @@
 /**
  * In-memory SecureStore adapter for tests and local CLI environments.
+ * NOTE: This implementation stores data in a plain in-memory Map and does NOT
+ * provide cryptographic encryption or keychain security. It satisfies the
+ * SecureStore interface for testing and local execution without native device keychains.
  */
 
 import { ok, type Result, StorageError } from '@/backend/core';

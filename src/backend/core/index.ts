@@ -11,3 +11,4 @@ export * from './config/config';
 export * from './clock/clock';
 export * from './events/emitter';
 export * from './perf/perf';
+export * from './utils/retry';

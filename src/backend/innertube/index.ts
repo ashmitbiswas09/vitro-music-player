@@ -1,6 +1,10 @@
 /**
  * Innertube module public API.
- * Request context, visitorData, endpoints, and defensive response parsers.
+ * Request context, visitorData, and YouTube Music search endpoints and parsers.
  */
 
-export const INNERTUBE_MODULE_NAME = 'innertube' as const;
+export * from './types';
+export * from './client';
+export * from './visitor/visitor-data-manager';
+export * from './context/context-builder';
+export * from './parsers/search-parser';
