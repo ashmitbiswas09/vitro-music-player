@@ -1,6 +1,11 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    "paths": {
+      "@/backend": ["./src/backend/index.ts"],
+      "@/backend/*": ["./src/backend/*"],
+      "@/scripts/*": ["./scripts/*"]
+    }
   }
 }

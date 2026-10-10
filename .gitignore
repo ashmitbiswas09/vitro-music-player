@@ -39,3 +39,20 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# test & coverage
+coverage/
+
+# backend cache & temp
+.cache/
+cache/
+scratch/
+
+# sensitive data & credentials
+*.cookie*
+*.session*
+*.tokens*
+*.auth*
+.env*
+!fixtures/sanitized/
+
