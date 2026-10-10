@@ -1,6 +1,8 @@
 /**
- * Platform interfaces and adapter exports.
- * Platform specifics live in adapters (memory, rn).
+ * Platform module public API.
+ * Defines port interfaces, universal Fetch adapter, and memory adapters.
  */
 
-export const PLATFORM_MODULE_NAME = 'platform' as const;
+export * from './types';
+export * from './adapters/fetch-http-client';
+export * from './memory';

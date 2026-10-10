@@ -17,6 +17,31 @@ const BACKEND_MODULES = [
   'services',
 ];
 
+const ALLOWED_DEPENDENCIES = {
+  core: [],
+  platform: ['core'],
+  innertube: ['core', 'platform', 'auth'],
+  auth: ['core', 'platform'],
+  cache: ['core', 'platform'],
+  streaming: ['core', 'platform', 'innertube'],
+  library: ['core', 'platform', 'innertube', 'auth', 'cache'],
+  'playback-core': ['core', 'platform', 'streaming', 'innertube', 'cache'],
+  lyrics: ['core', 'platform'],
+  downloads: ['core', 'platform', 'streaming', 'cache'],
+  services: [
+    'core',
+    'platform',
+    'innertube',
+    'auth',
+    'streaming',
+    'cache',
+    'library',
+    'playback-core',
+    'lyrics',
+    'downloads',
+  ],
+};
+
 function getBackendModuleInfo(filePath) {
   const normalized = filePath.replace(/\\/g, '/');
   const backendIndex = normalized.indexOf('/src/backend/');
@@ -50,14 +75,16 @@ const backendBoundariesPlugin = {
         messages: {
           noUiInBackend:
             'Importing "{{source}}" is prohibited in backend code. Only platform/rn adapters may import React Native / Expo native UI modules.',
-          noCrossModuleInternal:
-            'Cross-module internal import "{{source}}" is forbidden. Import only from the public barrel of "{{targetModule}}".',
+          noRelativeCrossModule:
+            'Cross-module relative import "{{source}}" into "{{targetModule}}" is forbidden. Import only through its public barrel "@/backend/{{targetModule}}".',
+          noDeepModuleImport:
+            'Import into another module must strictly use "@/backend/{{targetModule}}". Deep subpath "{{source}}" is forbidden.',
           noBackendRootImport:
             'Do not import from the backend root barrel inside backend modules. Import specific module barrels.',
-          coreCannotDependOnOthers:
-            'The core module is the foundation and cannot depend on other backend module "{{targetModule}}".',
-          noDependOnServices:
-            'Module "{{currentModule}}" cannot depend on "services". Services is the composition root.',
+          noSelfAliasImport:
+            'Do not import own module barrel via "@/backend/{{targetModule}}". Use internal relative imports.',
+          disallowedDependency:
+            'Module "{{currentModule}}" is not allowed to import "{{targetModule}}". Allowed dependencies: [{{allowed}}].',
         },
       },
       create(context) {
@@ -98,82 +125,60 @@ const backendBoundariesPlugin = {
             return;
           }
 
-          // 3. Check alias imports like '@/backend/<module>/...'
-          if (source.startsWith('@/backend/')) {
-            const afterPrefix = source.slice('@/backend/'.length);
-            const segments = afterPrefix.split('/');
-            const targetModule = segments[0];
-
-            if (BACKEND_MODULES.includes(targetModule)) {
-              if (targetModule !== currentInfo.moduleName) {
-                // If it imports deeper than the module root barrel
-                if (segments.length > 1 && segments[1] !== 'index' && segments[1] !== '') {
-                  context.report({
-                    node: node.source,
-                    messageId: 'noCrossModuleInternal',
-                    data: { source, targetModule },
-                  });
-                  return;
-                }
-
-                if (currentInfo.moduleName === 'core') {
-                  context.report({
-                    node: node.source,
-                    messageId: 'coreCannotDependOnOthers',
-                    data: { targetModule },
-                  });
-                  return;
-                }
-
-                if (targetModule === 'services' && currentInfo.moduleName !== 'services') {
-                  context.report({
-                    node: node.source,
-                    messageId: 'noDependOnServices',
-                    data: { currentModule: currentInfo.moduleName },
-                  });
-                  return;
-                }
-              }
-            }
-            return;
-          }
-
-          // 4. Check relative imports like '../...'
+          // 3. Forbid ANY relative cross-module import
           if (source.startsWith('.')) {
             const dir = path.dirname(filename);
             const resolvedTarget = path.resolve(dir, source).replace(/\\/g, '/');
             const targetInfo = getBackendModuleInfo(resolvedTarget);
 
             if (targetInfo && targetInfo.moduleName !== currentInfo.moduleName) {
-              const isBarrel =
-                targetInfo.relativePath === targetInfo.moduleName ||
-                targetInfo.relativePath === `${targetInfo.moduleName}/index` ||
-                targetInfo.relativePath === `${targetInfo.moduleName}/index.ts` ||
-                targetInfo.relativePath === `${targetInfo.moduleName}/index.js`;
+              context.report({
+                node: node.source,
+                messageId: 'noRelativeCrossModule',
+                data: { source, targetModule: targetInfo.moduleName },
+              });
+              return;
+            }
+          }
 
-              if (!isBarrel) {
+          // 4. Validate alias imports: must be exact '@/backend/<targetModule>'
+          if (source.startsWith('@/backend/')) {
+            const subpath = source.slice('@/backend/'.length);
+            const segments = subpath.split('/');
+            const targetModule = segments[0];
+
+            if (BACKEND_MODULES.includes(targetModule)) {
+              // Rule 4a: Must not import own barrel via alias
+              if (targetModule === currentInfo.moduleName) {
                 context.report({
                   node: node.source,
-                  messageId: 'noCrossModuleInternal',
-                  data: { source, targetModule: targetInfo.moduleName },
+                  messageId: 'noSelfAliasImport',
+                  data: { targetModule },
                 });
                 return;
               }
 
-              if (currentInfo.moduleName === 'core') {
+              // Rule 4b: No deep import into another module
+              if (segments.length > 1) {
                 context.report({
                   node: node.source,
-                  messageId: 'coreCannotDependOnOthers',
-                  data: { targetModule: targetInfo.moduleName },
+                  messageId: 'noDeepModuleImport',
+                  data: { source, targetModule },
                 });
                 return;
               }
 
-              if (targetInfo.moduleName === 'services' && currentInfo.moduleName !== 'services') {
+              // Rule 4c: Check allowed dependencies map
+              const allowed = ALLOWED_DEPENDENCIES[currentInfo.moduleName] || [];
+              if (!allowed.includes(targetModule)) {
                 context.report({
                   node: node.source,
-                  messageId: 'noDependOnServices',
-                  data: { currentModule: currentInfo.moduleName },
+                  messageId: 'disallowedDependency',
+                  data: {
+                    currentModule: currentInfo.moduleName,
+                    targetModule,
+                    allowed: allowed.join(', ') || 'none',
+                  },
                 });
                 return;
               }

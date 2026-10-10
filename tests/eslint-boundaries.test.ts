@@ -31,44 +31,96 @@ describe('ESLint Architecture Boundaries', () => {
     expect(boundaryErrors.length).toBe(0);
   });
 
-  it('rejects cross-module internal imports', async () => {
+  it('forbids ANY relative cross-module import', async () => {
+    const results = await eslint.lintText(
+      `import { CORE_MODULE_NAME } from '../core';\nexport const m = CORE_MODULE_NAME;\n`,
+      {
+        filePath: path.resolve(__dirname, '../src/backend/innertube/sample.ts'),
+      },
+    );
+    expect(results[0].errorCount).toBeGreaterThan(0);
+    const hasRelativeMsg = results[0].messages.some((m) =>
+      m.message.includes('Cross-module relative import'),
+    );
+    expect(hasRelativeMsg).toBe(true);
+  });
+
+  it('forbids deep subpath imports into another module', async () => {
     const results = await eslint.lintText(
       `import { helper } from '@/backend/innertube/parsers/search';\nexport const x = helper;\n`,
+      {
+        filePath: path.resolve(__dirname, '../src/backend/library/sample.ts'),
+      },
+    );
+    expect(results[0].errorCount).toBeGreaterThan(0);
+    const hasDeepMsg = results[0].messages.some((m) => m.message.includes('Deep subpath'));
+    expect(hasDeepMsg).toBe(true);
+  });
+
+  it('forbids importing own module barrel via alias', async () => {
+    const results = await eslint.lintText(
+      `import { AUTH_MODULE_NAME } from '@/backend/auth';\nexport const a = AUTH_MODULE_NAME;\n`,
       {
         filePath: path.resolve(__dirname, '../src/backend/auth/sample.ts'),
       },
     );
     expect(results[0].errorCount).toBeGreaterThan(0);
-    const hasBoundaryMsg = results[0].messages.some((m) =>
-      m.message.includes('Cross-module internal import'),
+    const hasSelfMsg = results[0].messages.some((m) =>
+      m.message.includes('Do not import own module barrel'),
     );
-    expect(hasBoundaryMsg).toBe(true);
+    expect(hasSelfMsg).toBe(true);
   });
 
-  it('allows cross-module imports from public barrels', async () => {
+  it('enforces allowed-dependencies map: rejects cache importing innertube', async () => {
     const results = await eslint.lintText(
-      `import { INNERTUBE_MODULE_NAME } from '@/backend/innertube';\nexport const m = INNERTUBE_MODULE_NAME;\n`,
+      `import { INNERTUBE_MODULE_NAME } from '@/backend/innertube';\nexport const x = INNERTUBE_MODULE_NAME;\n`,
       {
-        filePath: path.resolve(__dirname, '../src/backend/auth/sample.ts'),
+        filePath: path.resolve(__dirname, '../src/backend/cache/sample.ts'),
       },
     );
-    const boundaryErrors = results[0].messages.filter((m) =>
-      m.message.includes('Cross-module internal import'),
+    expect(results[0].errorCount).toBeGreaterThan(0);
+    const hasDisallowedMsg = results[0].messages.some((m) =>
+      m.message.includes('is not allowed to import "innertube"'),
     );
-    expect(boundaryErrors.length).toBe(0);
+    expect(hasDisallowedMsg).toBe(true);
   });
 
-  it('rejects core module depending on other modules', async () => {
+  it('enforces allowed-dependencies map: rejects core depending on any module', async () => {
     const results = await eslint.lintText(
-      `import { INNERTUBE_MODULE_NAME } from '@/backend/innertube';\nexport const m = INNERTUBE_MODULE_NAME;\n`,
+      `import { PLATFORM_MODULE_NAME } from '@/backend/platform';\nexport const x = PLATFORM_MODULE_NAME;\n`,
       {
         filePath: path.resolve(__dirname, '../src/backend/core/sample.ts'),
       },
     );
     expect(results[0].errorCount).toBeGreaterThan(0);
-    const hasFoundationMsg = results[0].messages.some((m) =>
-      m.message.includes('The core module is the foundation'),
+    const hasDisallowedMsg = results[0].messages.some((m) =>
+      m.message.includes('is not allowed to import "platform"'),
     );
-    expect(hasFoundationMsg).toBe(true);
+    expect(hasDisallowedMsg).toBe(true);
+  });
+
+  it('allows valid barrel import according to allowed-dependencies map', async () => {
+    const results = await eslint.lintText(
+      `import { CORE_MODULE_NAME } from '@/backend/core';\nexport const m = CORE_MODULE_NAME;\n`,
+      {
+        filePath: path.resolve(__dirname, '../src/backend/cache/sample.ts'),
+      },
+    );
+    const boundaryErrors = results[0].messages.filter(
+      (m) => m.ruleId === 'backend-boundaries/enforce-boundaries',
+    );
+    expect(boundaryErrors.length).toBe(0);
+  });
+
+  it('forbids root backend barrel inside backend modules', async () => {
+    const results = await eslint.lintText(
+      `import { CORE_MODULE_NAME } from '@/backend';\nexport const m = CORE_MODULE_NAME;\n`,
+      {
+        filePath: path.resolve(__dirname, '../src/backend/cache/sample.ts'),
+      },
+    );
+    expect(results[0].errorCount).toBeGreaterThan(0);
+    const hasRootMsg = results[0].messages.some((m) => m.message.includes('backend root barrel'));
+    expect(hasRootMsg).toBe(true);
   });
 });

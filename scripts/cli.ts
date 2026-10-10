@@ -41,9 +41,8 @@ async function handleSearch(query: string | undefined): Promise<void> {
 
   const searchStart = performance.now();
   console.log(`[CLI] Searching for: "${query}"...`);
-
-  // Stub for Phase 0: module integration occurs in Phase 2 (Innertube)
-  console.log('[CLI] Innertube search endpoint will be integrated in Phase 2.');
+  console.log('[CLI] Status: NOT IMPLEMENTED YET (scheduled for Phase 2 - Innertube).');
+  console.log('[CLI] Result: No fake data returned.');
   const searchLatencyMs = performance.now() - searchStart;
 
   console.log(`[Perf] Search Latency: ${searchLatencyMs.toFixed(2)} ms`);
@@ -58,9 +57,8 @@ async function handleResolve(videoId: string | undefined): Promise<void> {
 
   const resolveStart = performance.now();
   console.log(`[CLI] Resolving audio stream for videoId: "${videoId}"...`);
-
-  // Stub for Phase 0: module integration occurs in Phase 3 (Streaming Resolver)
-  console.log('[CLI] Stream resolver will be integrated in Phase 3.');
+  console.log('[CLI] Status: NOT IMPLEMENTED YET (scheduled for Phase 3 - Streaming Resolver).');
+  console.log('[CLI] Result: No fake data returned.');
   const resolveLatencyMs = performance.now() - resolveStart;
 
   console.log(`[Perf] Time to Resolve Stream: ${resolveLatencyMs.toFixed(2)} ms`);
@@ -69,9 +67,8 @@ async function handleResolve(videoId: string | undefined): Promise<void> {
 async function handleHome(): Promise<void> {
   const homeStart = performance.now();
   console.log('[CLI] Fetching Home feed...');
-
-  // Stub for Phase 0: module integration occurs in Phase 2
-  console.log('[CLI] Innertube browse/home endpoint will be integrated in Phase 2.');
+  console.log('[CLI] Status: NOT IMPLEMENTED YET (scheduled for Phase 2 - Innertube Browse).');
+  console.log('[CLI] Result: No fake data returned.');
   const homeLatencyMs = performance.now() - homeStart;
 
   console.log(`[Perf] Home Feed Latency: ${homeLatencyMs.toFixed(2)} ms`);

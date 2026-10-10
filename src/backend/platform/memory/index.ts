@@ -1,5 +1,9 @@
 /**
- * Platform in-memory adapters for testing and Node CLI environments.
+ * In-memory platform adapters for tests and local Node CLI environments.
  */
 
-export const MEMORY_ADAPTER_NAME = 'memory' as const;
+export * from './memory-http-client';
+export * from './memory-secure-store';
+export * from './memory-key-value-store';
+export * from './memory-sql-database';
+export * from './memory-file-store';

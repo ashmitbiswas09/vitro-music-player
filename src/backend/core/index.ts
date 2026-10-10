@@ -1,6 +1,13 @@
 /**
  * Core module public API.
- * Shared domain types, Result/error types, logger, config, clock, events, perf marks.
+ * Shared domain models, Result/errors, logger, config, clock, events, and performance timing.
  */
 
-export const CORE_MODULE_NAME = 'core' as const;
+export * from './types/domain';
+export * from './types/errors';
+export * from './types/result';
+export * from './logger/logger';
+export * from './config/config';
+export * from './clock/clock';
+export * from './events/emitter';
+export * from './perf/perf';
