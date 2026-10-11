@@ -144,3 +144,57 @@ export function extractBrowseId(obj: unknown): string | undefined {
 
   return undefined;
 }
+
+export function isValidTrackId(id?: string): id is string {
+  return typeof id === 'string' && /^[a-zA-Z0-9_-]{11}$/.test(id);
+}
+
+export function isValidArtistId(id?: string): id is string {
+  return typeof id === 'string' && id.startsWith('UC');
+}
+
+export function isValidAlbumId(id?: string): id is string {
+  return typeof id === 'string' && (id.startsWith('MPREb_') || id.startsWith('OLAK5uy_'));
+}
+
+export function isValidPlaylistId(id?: string): id is string {
+  return (
+    typeof id === 'string' &&
+    (id.startsWith('VL') || id.startsWith('PL') || id.startsWith('RD'))
+  );
+}
+
+export const DESCRIPTORS = new Set([
+  'song',
+  'video',
+  'episode',
+  'podcast',
+  'single',
+  'album',
+  'ep',
+  'playlist',
+  'artist',
+  '•',
+  '&',
+  ',',
+]);
+
+export function isDateOrCountText(text: string): boolean {
+  if (/^\d+(\.\d+)?[kmb]?\s+(views?|plays?|subscribers?|listeners?)/i.test(text)) {
+    return true;
+  }
+  if (/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}/i.test(text)) {
+    return true;
+  }
+  if (/^\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(text)) {
+    return true;
+  }
+  if (/^\d+\s+(days?|weeks?|months?|years?|hours?)\s+ago/i.test(text)) {
+    return true;
+  }
+  if (/^\d{4}$/.test(text.trim())) {
+    return true;
+  }
+  return false;
+}
+

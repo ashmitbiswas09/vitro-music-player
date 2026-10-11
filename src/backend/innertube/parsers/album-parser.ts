@@ -5,15 +5,42 @@
 import { z } from 'zod';
 import { ok, type Result, type AppError, type Track, type Album, perf } from '@/backend/core';
 import type { AlbumDetailResponse } from '../types';
-import { runsToText, parseDuration, extractThumbnails, extractVideoId } from './parser-utils';
+import {
+  runsToText,
+  parseDuration,
+  extractThumbnails,
+  extractVideoId,
+  isValidTrackId,
+  isValidArtistId,
+} from './parser-utils';
 
 const ResponsiveHeaderSchema = z.object({
   title: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
-  straplineTextOne: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
+  straplineTextOne: z
+    .object({
+      runs: z
+        .array(
+          z.object({
+            text: z.string(),
+            navigationEndpoint: z
+              .object({
+                browseEndpoint: z
+                  .object({
+                    browseId: z.string().optional(),
+                  })
+                  .optional(),
+              })
+              .optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
   subtitle: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
   secondSubtitle: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
   thumbnail: z.unknown().optional(),
 });
+
 
 export function parseAlbumResponse(
   rawBody: unknown,
@@ -52,8 +79,9 @@ export function parseAlbumResponse(
       (data.header as Record<string, unknown> | undefined)?.musicResponsiveHeaderRenderer;
 
     let albumTitle = 'Unknown Album';
-    const albumArtists: { name: string }[] = [];
+    const albumArtists: { id?: string; name: string }[] = [];
     let albumYear: number | undefined;
+
     let thumbnails = extractThumbnails(data.header ?? headerObj);
 
     if (headerRenderer) {
@@ -64,9 +92,15 @@ export function parseAlbumResponse(
           albumTitle = runsToText(title.runs) || albumTitle;
         }
         if (straplineTextOne?.runs) {
-          const artistName = runsToText(straplineTextOne.runs);
-          if (artistName) {
-            albumArtists.push({ name: artistName });
+          for (const r of straplineTextOne.runs) {
+            const artistName = r.text.trim();
+            if (artistName && artistName !== '•' && artistName !== '&' && artistName !== ',') {
+              const browseId = r.navigationEndpoint?.browseEndpoint?.browseId;
+              albumArtists.push({
+                id: browseId && isValidArtistId(browseId) ? browseId : undefined,
+                name: artistName,
+              });
+            }
           }
         }
         if (subtitle?.runs) {
@@ -132,7 +166,7 @@ export function parseAlbumResponse(
           extractVideoId(item.navigationEndpoint) ??
           extractVideoId(titleCol);
 
-        if (title && videoId) {
+        if (title && videoId && isValidTrackId(videoId)) {
           tracks.push({
             id: videoId,
             title,

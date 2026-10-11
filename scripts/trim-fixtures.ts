@@ -564,16 +564,7 @@ function trimSearchRadiohead(): unknown {
     secList.contents = secList.contents.slice(0, 16);
   }
 
-  const sanitized = sanitize(pruned) as Record<string, unknown>;
-
-  // Ensure responseSizeBytes is > 100,000 to keep test line 29 passing without loosening test
-  const currentBytes = Buffer.byteLength(JSON.stringify(sanitized), 'utf-8');
-  if (currentBytes <= 100000) {
-    const deficit = 100050 - currentBytes;
-    sanitized._searchPayloadSizeConstraint = '0'.repeat(Math.max(0, deficit));
-  }
-
-  return sanitized;
+  return sanitize(pruned);
 }
 
 function trimResolve(filename: string): unknown {

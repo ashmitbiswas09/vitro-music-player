@@ -5,7 +5,16 @@
 import { z } from 'zod';
 import { ok, type Result, type AppError, perf } from '@/backend/core';
 import type { HomeFeedResponse, HomeSection, SearchResultItem } from '../types';
-import { runsToText, extractThumbnails, extractVideoId, extractBrowseId } from './parser-utils';
+import {
+  runsToText,
+  extractThumbnails,
+  extractVideoId,
+  extractBrowseId,
+  isValidTrackId,
+  isValidArtistId,
+  isValidAlbumId,
+  isValidPlaylistId,
+} from './parser-utils';
 
 const TwoRowItemSchema = z.object({
   title: z
@@ -42,7 +51,7 @@ function parseCardItem(raw: unknown): SearchResultItem | null {
     const browseId = extractBrowseId(navigationEndpoint);
 
     if (browseId) {
-      if (browseId.startsWith('MPREb_')) {
+      if (isValidAlbumId(browseId)) {
         return {
           type: 'album',
           album: {
@@ -53,18 +62,18 @@ function parseCardItem(raw: unknown): SearchResultItem | null {
           },
         };
       }
-      if (browseId.startsWith('VLPL') || browseId.startsWith('PL') || browseId.startsWith('RDAMPL')) {
+      if (isValidPlaylistId(browseId)) {
         return {
           type: 'playlist',
           playlist: {
-            id: browseId.startsWith('VL') ? browseId.slice(2) : browseId,
+            id: browseId,
             title,
             author: subtitle,
             thumbnails,
           },
         };
       }
-      if (browseId.startsWith('UC') || browseId.startsWith('FEmusic_artist_')) {
+      if (isValidArtistId(browseId)) {
         return {
           type: 'artist',
           artist: {
@@ -76,26 +85,13 @@ function parseCardItem(raw: unknown): SearchResultItem | null {
       }
     }
 
-    if (videoId) {
+    if (videoId && isValidTrackId(videoId)) {
       return {
         type: 'track',
         track: {
           id: videoId,
           title,
           artists: subtitle ? [{ name: subtitle }] : [],
-          thumbnails,
-        },
-      };
-    }
-
-    // Default to playlist if browseId present
-    if (browseId) {
-      return {
-        type: 'playlist',
-        playlist: {
-          id: browseId,
-          title,
-          author: subtitle,
           thumbnails,
         },
       };

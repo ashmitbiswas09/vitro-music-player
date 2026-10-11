@@ -5,13 +5,43 @@
 import { z } from 'zod';
 import { ok, type Result, type AppError, type Track, perf } from '@/backend/core';
 import type { NextQueueResponse } from '../types';
-import { runsToText, parseDuration, extractThumbnails } from './parser-utils';
+import {
+  runsToText,
+  parseDuration,
+  extractThumbnails,
+  isValidTrackId,
+  isValidArtistId,
+  isValidAlbumId,
+  isDateOrCountText,
+} from './parser-utils';
+
+const RunItemSchema = z.object({
+  text: z.string(),
+  navigationEndpoint: z
+    .object({
+      browseEndpoint: z
+        .object({
+          browseId: z.string().optional(),
+          browseEndpointContextSupportedConfigs: z
+            .object({
+              browseEndpointContextMusicConfig: z
+                .object({
+                  pageType: z.string().optional(),
+                })
+                .optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
 
 const PlaylistPanelVideoSchema = z.object({
   videoId: z.string().optional(),
-  title: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
-  longBylineText: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
-  shortBylineText: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
+  title: z.object({ runs: z.array(RunItemSchema).optional() }).optional(),
+  longBylineText: z.object({ runs: z.array(RunItemSchema).optional() }).optional(),
+  shortBylineText: z.object({ runs: z.array(RunItemSchema).optional() }).optional(),
   lengthText: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
   thumbnail: z.unknown().optional(),
   selected: z.boolean().optional(),
@@ -74,18 +104,54 @@ export function parseNextResponse(
 
         const { videoId, title: titleObj, longBylineText, shortBylineText, lengthText, thumbnail, selected } =
           parsedItem.data;
-        const id = videoId ?? fallbackVideoId;
+        if (!videoId || !isValidTrackId(videoId)) continue;
+        const id = videoId;
         const title = runsToText(titleObj?.runs);
-        if (!title || !id) continue;
+        if (!title) continue;
 
-        const bylineRuns = longBylineText?.runs ?? shortBylineText?.runs;
-        const artists: { name: string }[] = [];
-        if (Array.isArray(bylineRuns)) {
-          for (const ar of bylineRuns) {
-            const text = ar.text.trim();
-            if (text && text !== '•' && !text.match(/^\d+:\d+$/)) {
-              artists.push({ name: text });
+        const artists: { id?: string; name: string }[] = [];
+        let album: { id?: string; title: string } | undefined;
+
+        if (Array.isArray(longBylineText?.runs)) {
+          let pastFirstBullet = false;
+          for (const r of longBylineText.runs) {
+            const text = r.text.trim();
+            if (!text) continue;
+            if (text === '•') {
+              pastFirstBullet = true;
+              continue;
             }
+            if (text === '&' || text === ',') continue;
+
+            const browseId = r.navigationEndpoint?.browseEndpoint?.browseId;
+            if (browseId && isValidArtistId(browseId)) {
+              if (!artists.some((a) => a.name === text)) {
+                artists.push({ id: browseId, name: text });
+              }
+            } else if (browseId && isValidAlbumId(browseId)) {
+              if (!album) {
+                album = { id: browseId, title: text };
+              }
+            } else if (!pastFirstBullet && !isDateOrCountText(text)) {
+              if (!artists.some((a) => a.name === text)) {
+                artists.push({
+                  id: browseId && isValidArtistId(browseId) ? browseId : undefined,
+                  name: text,
+                });
+              }
+            }
+          }
+        }
+
+        if (artists.length === 0 && Array.isArray(shortBylineText?.runs)) {
+          for (const r of shortBylineText.runs) {
+            const text = r.text.trim();
+            if (!text || text === '&' || text === ',' || text === '•') continue;
+            const browseId = r.navigationEndpoint?.browseEndpoint?.browseId;
+            artists.push({
+              id: browseId && isValidArtistId(browseId) ? browseId : undefined,
+              name: text,
+            });
           }
         }
 
@@ -96,6 +162,7 @@ export function parseNextResponse(
           id,
           title,
           artists,
+          album,
           durationSeconds,
           thumbnails,
         };

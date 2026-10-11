@@ -5,7 +5,15 @@
 import { z } from 'zod';
 import { ok, type Result, type AppError, type Track, type Artist, type Album, perf } from '@/backend/core';
 import type { ArtistDetailResponse } from '../types';
-import { runsToText, parseDuration, extractThumbnails, extractVideoId, extractBrowseId } from './parser-utils';
+import {
+  runsToText,
+  parseDuration,
+  extractThumbnails,
+  extractVideoId,
+  extractBrowseId,
+  isValidTrackId,
+  isValidAlbumId,
+} from './parser-utils';
 
 const ImmersiveHeaderSchema = z.object({
   title: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
@@ -101,7 +109,7 @@ export function parseArtistResponse(
 
                 const itemThumbs = extractThumbnails(item.thumbnail) ?? thumbnails;
 
-                if (title && videoId) {
+                if (title && videoId && isValidTrackId(videoId)) {
                   topTracks.push({
                     id: videoId,
                     title,
@@ -139,7 +147,7 @@ export function parseArtistResponse(
               const yearMatch = subtitle.match(/\b(19\d\d|20\d\d)\b/);
               const year = yearMatch ? Number.parseInt(yearMatch[1], 10) : undefined;
 
-              if (title && browseId) {
+              if (title && browseId && isValidAlbumId(browseId)) {
                 targetList.push({
                   id: browseId,
                   title,

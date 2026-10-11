@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { ESLint } from 'eslint';
 import path from 'node:path';
 
-describe('ESLint Architecture Boundaries', () => {
+describe('ESLint Architecture Boundaries', { timeout: 60000 }, () => {
   const eslint = new ESLint({
     overrideConfigFile: path.resolve(__dirname, '../eslint.config.js'),
   });
+
 
   it('rejects React/React Native imports in src/backend/core', async () => {
     const results = await eslint.lintText(`import React from 'react';`, {

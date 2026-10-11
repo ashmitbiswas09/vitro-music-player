@@ -5,7 +5,16 @@
 import { z } from 'zod';
 import { ok, type Result, type AppError, type Track, type Playlist, perf } from '@/backend/core';
 import type { PlaylistDetailResponse } from '../types';
-import { runsToText, parseDuration, extractThumbnails, extractVideoId } from './parser-utils';
+import {
+  runsToText,
+  parseDuration,
+  extractThumbnails,
+  extractVideoId,
+  isValidTrackId,
+  isValidArtistId,
+  isDateOrCountText,
+} from './parser-utils';
+
 
 const ResponsiveHeaderSchema = z.object({
   title: z.object({ runs: z.array(z.object({ text: z.string() })).optional() }).optional(),
@@ -125,13 +134,17 @@ export function parsePlaylistResponse(
           const artistCol = (flexCols?.[1] as Record<string, unknown> | undefined)
             ?.musicResponsiveListItemFlexColumnRenderer as Record<string, unknown> | undefined;
           const artistRuns = (artistCol?.text as Record<string, unknown> | undefined)?.runs as unknown[];
-          const itemArtists: { name: string }[] = [];
+          const itemArtists: { id?: string; name: string }[] = [];
           if (Array.isArray(artistRuns)) {
             for (const ar of artistRuns) {
               const text = (ar as { text?: string })?.text?.trim();
-              if (text && text !== '•' && !text.match(/^\d+:\d+$/)) {
-                itemArtists.push({ name: text });
-              }
+              if (!text || text === '•' || text === '&' || text === ',' || text.match(/^\d+:\d+$/) || isDateOrCountText(text)) continue;
+              const browseId = (ar as { navigationEndpoint?: { browseEndpoint?: { browseId?: string } } })
+                ?.navigationEndpoint?.browseEndpoint?.browseId;
+              itemArtists.push({
+                id: browseId && isValidArtistId(browseId) ? browseId : undefined,
+                name: text,
+              });
             }
           }
 
@@ -153,7 +166,7 @@ export function parsePlaylistResponse(
 
           const itemThumbs = extractThumbnails(item.thumbnail) ?? thumbnails;
 
-          if (title && videoId) {
+          if (title && videoId && isValidTrackId(videoId)) {
             tracks.push({
               id: videoId,
               title,

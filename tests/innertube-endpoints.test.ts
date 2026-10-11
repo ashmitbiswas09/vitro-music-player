@@ -290,7 +290,7 @@ describe('Innertube Remaining Endpoints - Real Fixtures & Defensive Parsing', ()
             contents: [
               {
                 playlistPanelVideoRenderer: {
-                  videoId: 'next-123',
+                  videoId: 'dQw4w9WgXcQ',
                   title: { runs: [{ text: 'Next Song' }] },
                   longBylineText: { runs: [{ text: 'Next Artist' }] },
                   lengthText: { runs: [{ text: '3:30' }] },
@@ -314,7 +314,7 @@ describe('Innertube Remaining Endpoints - Real Fixtures & Defensive Parsing', ()
         expect(res.value.items[0]?.type).toBe('track');
         if (res.value.items[0]?.type === 'track') {
           expect(res.value.items[0].track.title).toBe('Next Song');
-          expect(res.value.items[0].track.id).toBe('next-123');
+          expect(res.value.items[0].track.id).toBe('dQw4w9WgXcQ');
         }
         expect(res.value.continuationToken).toBe('next-radio-token');
       }

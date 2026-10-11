@@ -12,6 +12,13 @@ export interface FetchHttpClientOptions {
   defaultTimeoutMs?: number;
 }
 
+function nowMs(): number {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
+}
+
 export class FetchHttpClient implements HttpClient {
   private readonly baseUrl: string;
   private readonly defaultHeaders: Record<string, string>;
@@ -46,7 +53,7 @@ export class FetchHttpClient implements HttpClient {
     url: string,
     options: HttpRequestOptions = {},
   ): Promise<Result<HttpResponse<T>, NetworkError>> {
-    const startTime = performance.now();
+    const startTime = nowMs();
     const targetUrl = this.buildUrl(url, options.params);
     const method = options.method ?? 'GET';
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
@@ -92,7 +99,7 @@ export class FetchHttpClient implements HttpClient {
         signal: controller.signal,
       });
 
-      const durationMs = performance.now() - startTime;
+      const durationMs = nowMs() - startTime;
       const responseHeaders: Record<string, string> = {};
       response.headers.forEach((val, key) => {
         responseHeaders[key.toLowerCase()] = val;
