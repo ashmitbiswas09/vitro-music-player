@@ -48,18 +48,46 @@ describe('Logger with Sensitive Data Redaction', () => {
     expect(sanitized.headers['Authorization']).toBe('[REDACTED]');
   });
 
-  it('redacts signed stream URL query parameters', () => {
+  it('redacts signed and identifying stream URL query parameters (ip, bui, sig, lsig)', () => {
     const streamUrl =
-      'https://rr1---sn-5uaeznle.googlevideo.com/videoplayback?expire=1710000000&ei=Abc&ip=1.2.3.4&id=o-Abc&itag=251&source=youtube&sig=AOB4R_MwRAIgZ...&signature=oldSig123&s=cipherSig&key=yt8';
+      'https://rr1---sn-5uaeznle.googlevideo.com/videoplayback?expire=1710000000&ei=Abc&ip=49.37.33.178&id=o-Abc&itag=251&source=youtube&bui=AWzQHwpg123&sig=AOB4R_MwRAIgZ...&lsig=APaTxxMwRA...&signature=oldSig123&s=cipherSig&key=yt8';
 
     const redacted = redactString(streamUrl);
+    expect(redacted).not.toContain('49.37.33.178');
+    expect(redacted).not.toContain('AWzQHwpg123');
     expect(redacted).not.toContain('AOB4R_MwRAIgZ');
+    expect(redacted).not.toContain('APaTxxMwRA');
     expect(redacted).not.toContain('oldSig123');
     expect(redacted).not.toContain('cipherSig');
+    expect(redacted).toContain('ip=[REDACTED]');
+    expect(redacted).toContain('bui=[REDACTED]');
     expect(redacted).toContain('sig=[REDACTED]');
+    expect(redacted).toContain('lsig=[REDACTED]');
     expect(redacted).toContain('signature=[REDACTED]');
     expect(redacted).toContain('s=[REDACTED]');
     expect(redacted).toContain('key=[REDACTED]');
+  });
+
+  it('redacts standalone ip= parameters and visitorData values in text and objects', () => {
+    const logSnippet =
+      'User connected from ip=192.168.1.50 with X-Goog-Visitor-Id: CgtaNk1mNy1ic0xEayi...';
+    const redacted = redactString(logSnippet);
+    expect(redacted).toContain('ip=[REDACTED]');
+    expect(redacted).not.toContain('192.168.1.50');
+    expect(redacted).toContain('X-Goog-Visitor-Id: [REDACTED]');
+    expect(redacted).not.toContain('CgtaNk1mNy1ic0xEayi');
+
+    // Test parameter pair object
+    const paramPair = {
+      service: 'CSI',
+      params: [
+        { key: 'c', value: 'WEB' },
+        { key: 'visitor_data', value: 'CgtaNk1mNy1ic0xEayi12345' },
+      ],
+    };
+    const sanitizedPair = redactValue(paramPair) as { params: { key: string; value: string }[] };
+    expect(sanitizedPair.params[0].value).toBe('WEB');
+    expect(sanitizedPair.params[1].value).toBe('[REDACTED]');
   });
 
   it('redacts sensitive object keys recursively', () => {

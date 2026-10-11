@@ -1,0 +1,33 @@
+{
+  "videoId": "9RfVp-GhKfs",
+  "strategy": "visionos",
+  "resolvedStream": {
+    "url": "https://rr5---sn-gwpa-jj0ee.googlevideo.com/videoplayback?expire=1791705753&ei=Oe7KarXIIurj9fwPkcaUyQ8&ip=[REDACTED]&id=o-AHTNbdkR6H66Nt2KIL3paYAB7RKYJG87XNRfdtypgt5c&itag=251&source=youtube&requiressl=yes&xpc=EgVo2aDSNQ%3D%3D&cps=568&met=1791684153%2C&mh=FD&mm=18%2C29&mn=sn-gwpa-jj0ee%2Csn-gwpa-25uy&ms=aub%2Crdu&mv=m&mvi=5&pl=22&rms=aub%2Caub&gcr=in&initcwndbps=1296375&bui=[REDACTED]&spc=I-rgISj4IMQ7XNH6BCZrfQBstS4xSQZby7VVz3YNk-bbEVhS0vLl4SAHCnpu&vprv=1&svpuc=1&mime=audio%2Fwebm&rqh=1&gir=yes&clen=4035012&dur=238.661&lmt=1714521901520678&mt=1791683622&fvip=8&keepalive=yes&fexp=51565115%2C52112905%2C52184231%2C52227521%2C52250513&c=VISIONOS&txp=4532434&sparams=expire%2Cei%2Cip%2Cid%2Citag%2Csource%2Crequiressl%2Cxpc%2Cgcr%2Cbui%2Cspc%2Cvprv%2Csvpuc%2Cmime%2Crqh%2Cgir%2Cclen%2Cdur%2Clmt&sig=[REDACTED]&lsparams=cps%2Cmet%2Cmh%2Cmm%2Cmn%2Cms%2Cmv%2Cmvi%2Cpl%2Crms%2Cinitcwndbps&lsig=[REDACTED]",
+    "mimeType": "audio/webm; codecs=\"opus\"",
+    "codec": "opus",
+    "bitrate": 150149,
+    "sampleRate": 48000,
+    "contentLength": 4035012,
+    "expiresAt": 1791705753000,
+    "loudnessDb": 3.88
+  },
+  "videoDetails": {
+    "videoId": "9RfVp-GhKfs",
+    "title": "Creep",
+    "author": "Radiohead - Topic",
+    "lengthSeconds": 239
+  },
+  "rawFormat": {
+    "itag": 251,
+    "url": "https://rr5---sn-gwpa-jj0ee.googlevideo.com/videoplayback?expire=1791705753&ei=Oe7KarXIIurj9fwPkcaUyQ8&ip=[REDACTED]&id=o-AHTNbdkR6H66Nt2KIL3paYAB7RKYJG87XNRfdtypgt5c&itag=251&source=youtube&requiressl=yes&xpc=EgVo2aDSNQ%3D%3D&cps=568&met=1791684153%2C&mh=FD&mm=18%2C29&mn=sn-gwpa-jj0ee%2Csn-gwpa-25uy&ms=aub%2Crdu&mv=m&mvi=5&pl=22&rms=aub%2Caub&gcr=in&initcwndbps=1296375&bui=[REDACTED]&spc=I-rgISj4IMQ7XNH6BCZrfQBstS4xSQZby7VVz3YNk-bbEVhS0vLl4SAHCnpu&vprv=1&svpuc=1&mime=audio%2Fwebm&rqh=1&gir=yes&clen=4035012&dur=238.661&lmt=1714521901520678&mt=1791683622&fvip=8&keepalive=yes&fexp=51565115%2C52112905%2C52184231%2C52227521%2C52250513&c=VISIONOS&txp=4532434&sparams=expire%2Cei%2Cip%2Cid%2Citag%2Csource%2Crequiressl%2Cxpc%2Cgcr%2Cbui%2Cspc%2Cvprv%2Csvpuc%2Cmime%2Crqh%2Cgir%2Cclen%2Cdur%2Clmt&sig=[REDACTED]&lsparams=cps%2Cmet%2Cmh%2Cmm%2Cmn%2Cms%2Cmv%2Cmvi%2Cpl%2Crms%2Cinitcwndbps&lsig=[REDACTED]",
+    "mimeType": "audio/webm; codecs=\"opus\"",
+    "bitrate": 150149,
+    "averageBitrate": 135255,
+    "contentLength": "4035012",
+    "audioQuality": "AUDIO_QUALITY_MEDIUM",
+    "audioSampleRate": "48000",
+    "audioChannels": 2,
+    "loudnessDb": 3.88,
+    "approxDurationMs": "238661"
+  }
+}

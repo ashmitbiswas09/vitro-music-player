@@ -113,12 +113,24 @@ export class AuthError extends AppError {
 
 export class StreamError extends AppError {
   readonly videoId: string;
-  readonly reason: 'UNPLAYABLE' | 'DECIPHER_FAILED' | 'EXPIRED' | 'NO_FORMATS';
+  readonly reason:
+    | 'UNPLAYABLE'
+    | 'DECIPHER_FAILED'
+    | 'EXPIRED'
+    | 'NO_FORMATS'
+    | 'HTTP_403'
+    | 'ALL_STRATEGIES_FAILED';
 
   constructor(
     message: string,
     videoId: string,
-    reason: 'UNPLAYABLE' | 'DECIPHER_FAILED' | 'EXPIRED' | 'NO_FORMATS',
+    reason:
+      | 'UNPLAYABLE'
+      | 'DECIPHER_FAILED'
+      | 'EXPIRED'
+      | 'NO_FORMATS'
+      | 'HTTP_403'
+      | 'ALL_STRATEGIES_FAILED',
     details?: AppErrorDetails,
     cause?: unknown,
   ) {

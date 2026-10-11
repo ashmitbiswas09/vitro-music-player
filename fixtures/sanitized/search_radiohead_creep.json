@@ -5,19 +5,19 @@
         "service": "CSI",
         "params": [
           {
-            "key": "[REDACTED]",
+            "key": "c",
             "value": "WEB_REMIX"
           },
           {
-            "key": "[REDACTED]",
+            "key": "cver",
             "value": "1.20240101.01.00"
           },
           {
-            "key": "[REDACTED]",
+            "key": "yt_li",
             "value": "0"
           },
           {
-            "key": "[REDACTED]",
+            "key": "GetSearch_rid",
             "value": "0x8870cdf0a0135cf4"
           }
         ]
@@ -26,7 +26,7 @@
         "service": "GFEEDBACK",
         "params": [
           {
-            "key": "[REDACTED]",
+            "key": "logged_in",
             "value": "0"
           }
         ]
@@ -35,11 +35,11 @@
         "service": "ECATCHER",
         "params": [
           {
-            "key": "[REDACTED]",
+            "key": "client.version",
             "value": "1.20000101"
           },
           {
-            "key": "[REDACTED]",
+            "key": "client.name",
             "value": "WEB_REMIX"
           }
         ]

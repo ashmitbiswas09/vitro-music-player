@@ -27,8 +27,16 @@ const SENSITIVE_KEY_PATTERNS = [
   /authorization/i,
   /sapisid/i,
   /session/i,
-  /visitordata/i,
-  /key/i,
+  /visitor.*data/i,
+  /visitor.*id/i,
+  /^ip$/i,
+  /client_?ip/i,
+  /^bui$/i,
+  /(?:^|_)api_?key/i,
+  /private_?key/i,
+  /secret_?key/i,
+  /auth_?key/i,
+  /signing_?key/i,
 ];
 
 const WHOLE_HEADER_PATTERNS: { regex: RegExp; replacement: string }[] = [
@@ -37,6 +45,8 @@ const WHOLE_HEADER_PATTERNS: { regex: RegExp; replacement: string }[] = [
   { regex: /(cookie:\s*)[^\r\n]+/gi, replacement: '$1[REDACTED]' },
   // Redact any Authorization header scheme in strings
   { regex: /(authorization:\s*)[^\r\n]+/gi, replacement: '$1[REDACTED]' },
+  // Redact X-Goog-Visitor-Id header in strings
+  { regex: /(x-goog-visitor-id:\s*)[^\r\n]+/gi, replacement: '$1[REDACTED]' },
 ];
 
 const SENSITIVE_STRING_PATTERNS: { regex: RegExp; replacement: string }[] = [
@@ -45,14 +55,34 @@ const SENSITIVE_STRING_PATTERNS: { regex: RegExp; replacement: string }[] = [
     regex: /\b(Bearer|Basic|Digest|OAuth|SAPISIDHASH|HMAC)\s+[\w\-._~+/]+=*/gi,
     replacement: '$1 [REDACTED]',
   },
-  // Signed stream URL query parameters (sig, signature, s, key, token, auth)
+  // Identifying and signed stream URL query parameters (ip, ipbits, client_ip, remote_ip, bui, sig, lsig, signature, s, key, token, auth, visitor_data, visitorData, visitor_id, session, session_id)
   {
-    regex: /([?&](?:sig|signature|s|key|token|auth)=)[^&"'\s\\]+/gi,
+    regex:
+      /([?&](?:ip|ipbits|client_ip|remote_ip|bui|sig|lsig|signature|s|key|token|auth|visitor_data|visitorData|visitor_id|session|session_id)=)[^&"'\s\\;,]+/gi,
+    replacement: '$1[REDACTED]',
+  },
+  // Standalone ip parameter (IPv4, IPv6, or query-like)
+  {
+    regex: /\b((?:client_?|remote_?)?ip=)(?!\[REDACTED\])[^&"'\s\\;,]+/gi,
+    replacement: '$1[REDACTED]',
+  },
+  // Standalone sig, lsig, signature, bui parameter
+  {
+    regex: /\b((?:l?sig|signature|bui)=)(?!\[REDACTED\])[^&"'\s\\;,]+/gi,
     replacement: '$1[REDACTED]',
   },
   // Standalone cookie tokens
-  { regex: /(SID|HSID|SSID|APISID|SAPISID|LOGIN_INFO)=[^;,\s]+/gi, replacement: '$1=[REDACTED]' },
-  { regex: /__Secure-[^=]+=[^;,\s]+/gi, replacement: '__Secure-[REDACTED]=[REDACTED]' },
+  {
+    regex: /(SID|HSID|SSID|APISID|SAPISID|LOGIN_INFO|VISITOR_INFO1_LIVE|YSC)=[^;,\s"&]+/gi,
+    replacement: '$1=[REDACTED]',
+  },
+  { regex: /__Secure-[^=]+=[^;,\s"&]+/gi, replacement: '__Secure-[REDACTED]=[REDACTED]' },
+  // VisitorData patterns in key-value text or JSON
+  {
+    regex:
+      /(["']?(?:visitorData|visitor_data|visitor-id|visitor_id)["']?\s*[:=]\s*["'])(?!\[REDACTED\])(?:Cg[A-Za-z0-9%_-]{15,}|[^"'\s\r\n]+)(["'])/gi,
+    replacement: '$1[REDACTED]$2',
+  },
 ];
 
 export function redactString(input: string): string {
@@ -97,8 +127,24 @@ export function redactValue(val: unknown, seen = new WeakSet()): unknown {
       return val.map((item) => redactValue(item, seen));
     }
 
+    // Check if this object represents a parameter pair (like YouTube's { key: "visitor_data", value: "..." })
+    const isParamPair =
+      typeof (val as Record<string, unknown>).key === 'string' &&
+      'value' in (val as Record<string, unknown>);
+    const paramKey = isParamPair ? ((val as Record<string, unknown>).key as string) : '';
+    const isSensitiveParam =
+      isParamPair &&
+      /visitor.*data|visitor.*id|^ip$|client.*ip|bui|cookie|token|auth|session|secret/i.test(
+        paramKey,
+      );
+
     const result: Record<string, unknown> = {};
     for (const [key, propVal] of Object.entries(val as Record<string, unknown>)) {
+      if (isSensitiveParam && key === 'value') {
+        result[key] = '[REDACTED]';
+        continue;
+      }
+
       // 1. Check for whole header keys (cookie, set-cookie, authorization)
       const isWholeHeaderKey = /^(?:cookie|set-cookie|authorization)$/i.test(key);
       if (isWholeHeaderKey) {

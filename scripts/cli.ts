@@ -7,7 +7,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FetchHttpClient } from '@/backend/platform';
 import { InnertubeClient, type SearchFilter } from '@/backend/innertube';
-import { redactValue } from '@/backend/core';
+import { redactValue, redactString } from '@/backend/core';
+import {
+  DefaultStreamResolver,
+  type StreamVerificationResult,
+  type ResolvedStream,
+} from '@/backend/streaming';
 
 const coldStartBegin = performance.now();
 
@@ -31,14 +36,18 @@ Commands:
   search <query> [--filter <filter>] [--record]
                       Search YouTube Music. Optional filters: songs, albums, artists, playlists, videos.
                       Pass --record to save real response fixture to fixtures/recorded and fixtures/sanitized.
-  resolve <videoId>   Resolve best audio stream URL and format (connected in Phase 3)
+  resolve <videoId> [--verify] [--record]
+                      Resolve best audio stream URL and format (highest bitrate Opus/AAC).
+                      Pass --verify to make a small ranged request (bytes 0-1023) to verify playability.
+                      Pass --record to save real response fixture to fixtures/recorded and fixtures/sanitized.
   home                Fetch personalized or browse home feed (connected in Phase 2 browse)
   help, --help, -h    Show this help menu
 
 Examples:
   npm run cli -- search "Radiohead Creep"
   npm run cli -- search "Radiohead" --filter songs --record
-  npm run cli -- resolve "dQw4w9WgXcQ"
+  npm run cli -- resolve "dQw4w9WgXcQ" --verify
+  npm run cli -- resolve "9RfVp-GhKfs" --verify --record
   npm run cli -- home
 `);
 }
@@ -48,7 +57,7 @@ function sanitizeFixtureData(data: unknown): unknown {
   if (sanitized && typeof sanitized === 'object' && sanitized.responseContext) {
     const rc = sanitized.responseContext as Record<string, unknown>;
     if (rc.visitorData) {
-      rc.visitorData = 'SANITIZED_VISITOR_DATA_TOKEN';
+      rc.visitorData = '[REDACTED]';
     }
   }
   return sanitized;
@@ -159,20 +168,161 @@ async function handleSearch(
   };
 }
 
-async function handleResolve(videoId: string | undefined): Promise<void> {
+async function handleResolve(
+  videoId: string | undefined,
+  shouldVerify: boolean,
+  shouldRecord: boolean,
+): Promise<CliTiming> {
   if (!videoId) {
-    console.error('Error: videoId is required. Usage: npm run cli -- resolve <videoId>');
+    console.error(
+      'Error: videoId is required. Usage: npm run cli -- resolve <videoId> [--verify] [--record]',
+    );
     process.exitCode = 1;
-    return;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: 0,
+    };
   }
 
   const resolveStart = performance.now();
   console.log(`[CLI] Resolving audio stream for videoId: "${videoId}"...`);
-  console.log('[CLI] Status: NOT IMPLEMENTED YET (scheduled for Phase 3 - Streaming Resolver).');
-  console.log('[CLI] Result: No fake data returned.');
-  const resolveLatencyMs = performance.now() - resolveStart;
 
-  console.log(`[Perf] Time to Resolve Stream: ${resolveLatencyMs.toFixed(2)} ms`);
+  const httpClient = new FetchHttpClient();
+  const resolver = new DefaultStreamResolver({ httpClient });
+
+  let resolved: ResolvedStream;
+  let verification: StreamVerificationResult | undefined;
+  let executionLatencyMs = 0;
+
+  if (shouldVerify) {
+    console.log('[CLI] Mode: Resolve with Range Verification (--verify)');
+    const res = await resolver.resolveAndVerify(videoId);
+    executionLatencyMs = performance.now() - resolveStart;
+
+    if (!res.ok) {
+      console.error(`[CLI Error] Stream resolution/verification failed: ${res.error.message}`);
+      if (res.error.details) {
+        console.error('[CLI Error Details]:', JSON.stringify(res.error.details, null, 2));
+      }
+      process.exitCode = 1;
+      return {
+        coldStartTimeMs: 0,
+        commandExecutionMs: executionLatencyMs,
+        totalTimeMs: performance.now() - resolveStart,
+      };
+    }
+    resolved = res.value.resolved;
+    verification = res.value.verification;
+  } else {
+    const res = await resolver.resolve(videoId);
+    executionLatencyMs = performance.now() - resolveStart;
+
+    if (!res.ok) {
+      console.error(`[CLI Error] Stream resolution failed: ${res.error.message}`);
+      if (res.error.details) {
+        console.error('[CLI Error Details]:', JSON.stringify(res.error.details, null, 2));
+      }
+      process.exitCode = 1;
+      return {
+        coldStartTimeMs: 0,
+        commandExecutionMs: executionLatencyMs,
+        totalTimeMs: performance.now() - resolveStart,
+      };
+    }
+    resolved = res.value;
+  }
+
+  const { stream, strategyName, videoDetails } = resolved;
+  const nowMs = Date.now();
+  const ttlMs = stream.expiresAt - nowMs;
+  const ttlHours = Math.max(0, Math.floor(ttlMs / (1000 * 60 * 60)));
+  const ttlMins = Math.max(0, Math.floor((ttlMs % (1000 * 60 * 60)) / (1000 * 60)));
+
+  console.log(`\n========================================`);
+  console.log(`Resolved Audio Stream:`);
+  console.log(`========================================`);
+  if (videoDetails?.title) {
+    console.log(
+      `  Title:            ${videoDetails.title}${videoDetails.author ? ` by ${videoDetails.author}` : ''}`,
+    );
+  }
+  console.log(`  Strategy:         ${strategyName}`);
+  console.log(`  Codec:            ${stream.codec.toUpperCase()} (${stream.mimeType})`);
+  console.log(
+    `  Bitrate:          ${(stream.bitrate / 1000).toFixed(1)} kbps (${stream.bitrate} bps)`,
+  );
+  if (stream.sampleRate) {
+    console.log(`  Sample Rate:      ${stream.sampleRate.toLocaleString()} Hz`);
+  }
+  if (stream.contentLength) {
+    console.log(
+      `  Content Length:   ${(stream.contentLength / (1024 * 1024)).toFixed(2)} MB (${stream.contentLength.toLocaleString()} bytes)`,
+    );
+  }
+  console.log(
+    `  Expires At:       ${new Date(stream.expiresAt).toISOString()} (in ~${ttlHours}h ${ttlMins}m)`,
+  );
+  if (stream.loudnessDb !== undefined) {
+    console.log(`  Loudness:         ${stream.loudnessDb > 0 ? '+' : ''}${stream.loudnessDb} dB`);
+  }
+  console.log(`  Stream URL:       ${redactString(stream.url)}`);
+
+  if (verification) {
+    console.log(`\n========================================`);
+    console.log(`Range Verification Check (bytes 0-1023):`);
+    console.log(`========================================`);
+    console.log(
+      `  Playable:         ${verification.isPlayable ? 'YES (Verified Working)' : 'NO (Failed)'}`,
+    );
+    console.log(`  HTTP Status:      ${verification.statusCode}`);
+    console.log(`  Content-Type:     ${verification.contentType ?? 'none'}`);
+    console.log(`  Content-Range:    ${verification.contentRange ?? 'none'}`);
+    console.log(`  Bytes Received:   ${verification.bytesReceived} bytes`);
+    console.log(`  TTFB Latency:     ${verification.timeToFirstByteMs.toFixed(2)} ms`);
+    if (verification.error) {
+      console.log(`  Error:            ${verification.error}`);
+    }
+  }
+
+  // Handle --record
+  if (shouldRecord && resolved.rawFormat) {
+    const fixturesDir = path.resolve(__dirname, '../fixtures');
+    const recordedDir = path.join(fixturesDir, 'recorded');
+    const sanitizedDir = path.join(fixturesDir, 'sanitized');
+
+    fs.mkdirSync(recordedDir, { recursive: true });
+    fs.mkdirSync(sanitizedDir, { recursive: true });
+
+    const cleanId = videoId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const recordedPath = path.join(recordedDir, `resolve_${cleanId}.json`);
+    const sanitizedPath = path.join(sanitizedDir, `resolve_${cleanId}.json`);
+
+    const recordPayload = {
+      videoId,
+      strategy: strategyName,
+      resolvedStream: stream,
+      videoDetails,
+      rawFormat: resolved.rawFormat,
+    };
+
+    fs.writeFileSync(recordedPath, JSON.stringify(recordPayload, null, 2), 'utf-8');
+
+    const sanitizedPayload = sanitizeFixtureData(recordPayload);
+    fs.writeFileSync(sanitizedPath, JSON.stringify(sanitizedPayload, null, 2), 'utf-8');
+
+    console.log(
+      `\n[Record] Raw resolved stream saved to: ${path.relative(process.cwd(), recordedPath)}`,
+    );
+    console.log(
+      `[Record] Sanitized fixture saved to:    ${path.relative(process.cwd(), sanitizedPath)}`,
+    );
+  }
+
+  return {
+    coldStartTimeMs: 0,
+    commandExecutionMs: executionLatencyMs,
+    totalTimeMs: performance.now() - resolveStart,
+  };
 }
 
 async function handleHome(): Promise<void> {
@@ -228,9 +378,24 @@ async function main(): Promise<void> {
       timingDetails = await handleSearch(query.trim(), filter, shouldRecord);
       break;
     }
-    case 'resolve':
-      await handleResolve(args[1]);
+    case 'resolve': {
+      let videoId = '';
+      let shouldVerify = false;
+      let shouldRecord = false;
+
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '--verify') {
+          shouldVerify = true;
+        } else if (args[i] === '--record') {
+          shouldRecord = true;
+        } else if (!args[i].startsWith('--')) {
+          videoId = args[i];
+        }
+      }
+
+      timingDetails = await handleResolve(videoId, shouldVerify, shouldRecord);
       break;
+    }
     case 'home':
       await handleHome();
       break;
