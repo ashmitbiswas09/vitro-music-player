@@ -128,12 +128,33 @@ export async function handleCache(
       break;
     }
 
+    case 'invalidate': {
+      if (!targetArg) {
+        console.error('Error: Please provide videoId to invalidate. Usage: npm run cli -- cache invalidate <videoId>');
+        process.exitCode = 1;
+        break;
+      }
+      console.log(`Invalidating stream cache for videoId: "${targetArg}"...`);
+      await backend.invalidateStream(targetArg);
+      console.log(`Stream URL cache invalidated successfully.`);
+      break;
+    }
+
+    case 'clear-user': {
+      console.log(`Clearing user-scoped cache entries (auth:user:*)...`);
+      await backend.clearUserScopedData();
+      console.log(`User-scoped cache cleared successfully.`);
+      break;
+    }
+
     default:
       console.log(`Unknown cache subcommand: "${subcommand}".`);
       console.log(`Available commands:`);
       console.log(`  npm run cli -- cache stats`);
       console.log(`  npm run cli -- cache clear`);
+      console.log(`  npm run cli -- cache clear-user`);
       console.log(`  npm run cli -- cache inspect <key>`);
+      console.log(`  npm run cli -- cache invalidate <videoId>`);
       console.log(`  npm run cli -- cache test [query]`);
   }
 

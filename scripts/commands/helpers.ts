@@ -41,8 +41,8 @@ Commands:
   health [--mode search|fixed] [--fixed]
                       Run stream resolution health check. Default runs ~15 diverse search queries,
                       resolves top track of each, and reports success. Pass --fixed for the 20-video list.
-  cache [stats|clear|inspect <key>|test <query>]
-                      Inspect cache hits, misses, timings, clear multi-tier cache, or run cold vs warm benchmark.
+  cache [stats|clear|clear-user|inspect <key>|invalidate <videoId>|test <query>]
+                      Inspect cache hits, misses, timings, clear multi-tier or user-scoped cache, or run cold vs warm benchmark.
   help, --help, -h    Show this help menu
 
 Examples:

@@ -137,3 +137,91 @@ To maintain architectural purity and prevent cyclic couplings, cross-module impo
 - **Architectural Linting**: ESLint flat config (`npm run lint`) enforces cross-module import boundaries and prevents React Native imports in domain code.
 - **Type Checking**: TypeScript strict mode (`npm run typecheck`).
 - **Formatting**: Prettier (`npm run format` / `npm run format:check`).
+
+---
+
+## 7. Cache Architecture & Design
+
+### Two-Tier Storage Architecture
+
+```mermaid
+flowchart TD
+    Req[Repository Request] --> InFlight{In-Flight Deduper}
+    InFlight -->|Existing Promise| Await[Await In-Flight Request]
+    InFlight -->|New Request| L1{L1 Memory LRU}
+    L1 -->|Fresh Hit < 0.1ms| Return[Return Data Immediately]
+    L1 -->|Stale Hit < 0.1ms| ReturnStale[Return Stale Data & Trigger Background Revalidation]
+    L1 -->|Miss| L2{L2 SQLite Store}
+    L2 -->|Fresh Hit < 10ms| Promote[Promote to L1 & Return Data]
+    L2 -->|Stale Hit < 10ms| PromoteStale[Promote to L1, Return Data & Revalidate in Background]
+    L2 -->|Miss| Net[Fetch Network via InnerTube / StreamResolver]
+    Net --> CacheWrite[Write to L1 & L2 SQLite]
+    CacheWrite --> Notify[Notify Active Subscribers]
+```
+
+1. **L1 In-Memory LRU (`LruCache`)**:
+   - Sub-millisecond synchronous retrieval ($< 0.1\text{ ms}$).
+   - Tracks both item count (`maxEntries`, default 200) and byte size (`maxSizeBytes`, default 20 MB).
+   - Evicts least-recently-used items when limits are exceeded.
+
+2. **L2 SQLite Persistence (`SqlCacheStore`)**:
+   - Durable relational persistence through the `SqlDatabase` port (`expo-sqlite` on device, `node:sqlite` / `MemorySqlDatabase` in Node).
+   - Indexed table `cache_entries` on `key`, `data_type`, and `stale_until` for fast index scans and background pruning (`deleteExpired`).
+
+### Stale-While-Revalidate (SWR) Engine
+
+- **Fresh Hit**: Returned immediately without invoking the network fetcher.
+- **Stale Hit**: Cached data is returned immediately ($< 1\text{ ms}$), satisfying the sub-100ms screen render requirement. In the background, `revalidateInBackground()` initiates an in-flight deduplicated fetch. When fresh data arrives, it updates the cache and notifies active subscribers registered via `observe...()`.
+- **Miss**: Underlying fetcher executes via `InFlightDeduper`, writes fresh data to both tiers, and returns.
+
+### Per-Data-Type Policies & Expiry-Aware Dynamic TTL
+
+| Data Type     | Fresh TTL | Stale TTL | SQLite Persistence | Notes |
+| :------------ | :-------- | :-------- | :----------------- | :---- |
+| **`home`**     | 10 min    | 24 hours  | Yes (`true`)       | Feed shelves and carousels. |
+| **`search`**   | 5 min     | 1 hour    | Yes (`true`)       | Query results with normalized whitespace and filter. |
+| **`album`**    | 24 hours  | 7 days    | Yes (`true`)       | Album metadata and tracklist. |
+| **`artist`**   | 12 hours  | 3 days    | Yes (`true`)       | Artist profile and discography. |
+| **`playlist`** | 15 min    | 24 hours  | Yes (`true`)       | Curated/user playlist items. |
+| **`suggest`**  | 30 min    | 2 hours   | Yes (`true`)       | Search autocomplete queries. |
+| **`stream`**   | Dynamic   | Dynamic   | **No (`false`)**   | **In-Memory Tier Only**. Dynamic safety margin based on stream `expiresAt`. |
+
+### Stream URLs In-Memory Only & Invalidation Rule
+
+- **Rationale**: YouTube signed stream URLs are bound to the client IP address (via the `ip=` URL query parameter) and cryptographic signatures (`sig=`/`s=`). When a device switches networks (e.g. Wi-Fi to cellular or VPN), existing signed stream URLs immediately return **HTTP 403 Forbidden**.
+- **Rule**: Stream URLs are marked `persistToSql: false` and are **never persisted to SQLite**.
+- **Invalidation**: `invalidateStream(videoId)` purges the cached stream entry from memory, guaranteeing that the next playback attempt re-resolves a fresh URL under the current network route.
+
+### Parsed Domain Models (Not Raw Responses)
+
+The cache strictly stores parsed domain models rather than raw InnerTube JSON payloads:
+- Discards all tracking tokens, command metadata, visual styling trees, and menu overlays.
+- Stored payload sizes:
+  - `search`: ~5.1 KB (vs ~150–300 KB raw response; **~97% reduction**)
+  - `home`: ~13.6 KB (vs ~200–400 KB raw response; **~95% reduction**)
+  - `album`: ~6.1 KB (vs ~120 KB raw response; **~95% reduction**)
+  - `artist`: ~6.5 KB (vs ~130 KB raw response; **~95% reduction**)
+  - `playlist`: ~8.3 KB (vs ~100 KB raw response; **~92% reduction**)
+  - `next`: ~2.3 KB (vs ~80 KB raw response; **~97% reduction**)
+  - `suggest`: ~0.4 KB (vs ~10 KB raw response; **~96% reduction**)
+  - `stream`: ~0.3 KB (vs ~180 KB raw player response; **~99.8% reduction**)
+
+### Auth Isolation & Logout Purge (`clearUserScopedData`)
+
+- Cache keys are generated via `CacheKeyBuilder` and strictly scoped:
+  - Guest queries: `browse:home:auth:guest`, `search:...`
+  - User-authenticated queries: `browse:home:auth:user:<id>`, `auth:user:<id>:search:...`
+- On user logout or account switch, `clearUserScopedData()` purges all entries scoped under `auth:user:*` from both L1 memory LRU and L2 SQLite, while preserving anonymous guest cache entries.
+
+### Prefetch Planner (`PrefetchPlanner`)
+
+- Proactively monitors the active playback queue.
+- Given the current track index, prefetches audio stream URLs for the next 1–2 tracks.
+- Skips tracks already warm in cache and re-resolves any stream within 5 minutes of provider expiration.
+
+### Dependency Rules & Boundary Enforcement
+
+- `cache` is a low-level module that imports **only `core` and `platform`**.
+- `cache` is **strictly prohibited from importing `innertube` or `streaming`** (enforced by ESLint).
+- The repository layer (`MusicRepository` in `services`) serves as the mediator between InnerTube, Streaming, and Cache.
+

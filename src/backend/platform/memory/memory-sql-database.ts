@@ -27,6 +27,12 @@ export class MemorySqlDatabase implements SqlDatabase {
       return ok({ rows: [], rowsAffected: 0 });
     }
 
+    // CREATE INDEX IF NOT EXISTS ...
+    const indexMatch = sql.match(/create\s+(?:unique\s+)?index\s+(?:if\s+not\s+exists\s+)?/i);
+    if (indexMatch) {
+      return ok({ rows: [], rowsAffected: 0 });
+    }
+
     // Basic INSERT simulation: INSERT OR REPLACE INTO tableName (col1, col2) VALUES (?, ?)
     const insertMatch = sql.match(
       /insert\s+(?:or\s+replace\s+)?into\s+([a-zA-Z0-9_]+)\s*(?:\(([^)]+)\))?/i,
@@ -73,52 +79,26 @@ export class MemorySqlDatabase implements SqlDatabase {
       return ok({ rows: [], rowsAffected: 1, insertId: table.length });
     }
 
-    // DELETE FROM tableName WHERE col = ?
-    const deleteWhereMatch = sql.match(
-      /delete\s+from\s+([a-zA-Z0-9_]+)\s+where\s+([a-zA-Z0-9_]+)\s*=\s*\?/i,
-    );
-    if (deleteWhereMatch) {
-      const tableName = deleteWhereMatch[1];
-      const colName = deleteWhereMatch[2];
-      const table = this.tables.get(tableName);
-      if (table) {
-        const initialLen = table.length;
-        const filtered = table.filter((r) => r[colName] !== params[0]);
-        this.tables.set(tableName, filtered);
-        return ok({ rows: [], rowsAffected: initialLen - filtered.length });
-      }
-      return ok({ rows: [], rowsAffected: 0 });
-    }
-
-    // DELETE FROM tableName WHERE col < ?
-    const deleteLtMatch = sql.match(
-      /delete\s+from\s+([a-zA-Z0-9_]+)\s+where\s+([a-zA-Z0-9_]+)\s*<\s*\?/i,
-    );
-    if (deleteLtMatch) {
-      const tableName = deleteLtMatch[1];
-      const colName = deleteLtMatch[2];
-      const table = this.tables.get(tableName);
-      if (table) {
-        const initialLen = table.length;
-        const filtered = table.filter(
-          (r) => Number(r[colName]) >= Number(params[0]),
-        );
-        this.tables.set(tableName, filtered);
-        return ok({ rows: [], rowsAffected: initialLen - filtered.length });
-      }
-      return ok({ rows: [], rowsAffected: 0 });
-    }
-
-    // Basic DELETE simulation: DELETE FROM tableName
-    const deleteMatch = sql.match(/delete\s+from\s+([a-zA-Z0-9_]+)/i);
+    // DELETE simulation: DELETE FROM tableName [WHERE ...]
+    const deleteMatch = sql.match(/delete\s+from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+))?/i);
     if (deleteMatch) {
       const tableName = deleteMatch[1];
+      const whereClause = deleteMatch[2];
       const table = this.tables.get(tableName);
-      const count = table ? table.length : 0;
-      if (table) {
-        table.length = 0;
+      if (!table) {
+        return ok({ rows: [], rowsAffected: 0 });
       }
-      return ok({ rows: [], rowsAffected: count });
+
+      if (!whereClause) {
+        const count = table.length;
+        table.length = 0;
+        return ok({ rows: [], rowsAffected: count });
+      }
+
+      const initialLen = table.length;
+      const remaining = table.filter((row) => !this.evaluateWhere(row, whereClause, params));
+      this.tables.set(tableName, remaining);
+      return ok({ rows: [], rowsAffected: initialLen - remaining.length });
     }
 
     return ok({ rows: [], rowsAffected: 1 });
@@ -132,39 +112,142 @@ export class MemorySqlDatabase implements SqlDatabase {
       return ok([]);
     }
 
-    // SELECT COUNT(*) as count FROM tableName
+    // SELECT COUNT(*) as count FROM tableName [WHERE ...]
     const countMatch = sql.match(
-      /select\s+count\(\*\)\s+(?:as\s+count\s+)?from\s+([a-zA-Z0-9_]+)/i,
+      /select\s+count\(\*\)\s+(?:as\s+count\s+)?from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+))?/i,
     );
     if (countMatch) {
       const tableName = countMatch[1];
+      const whereClause = countMatch[2];
       const table = this.tables.get(tableName) ?? [];
-      return ok([{ count: table.length }] as unknown as T[]);
+      const matching = whereClause
+        ? table.filter((row) => this.evaluateWhere(row, whereClause, params))
+        : table;
+      return ok([{ count: matching.length }] as unknown as T[]);
     }
 
-    // SELECT ... FROM tableName WHERE col = ?
-    const selectWhereMatch = sql.match(
-      /select\s+.*?\s+from\s+([a-zA-Z0-9_]+)\s+where\s+([a-zA-Z0-9_]+)\s*=\s*\?/i,
-    );
-    if (selectWhereMatch) {
-      const tableName = selectWhereMatch[1];
-      const colName = selectWhereMatch[2];
-      const table = this.tables.get(tableName) ?? [];
-      const matching = table.filter((r) => r[colName] === params[0]);
-      return ok([...matching] as unknown as T[]);
-    }
-
-    // Basic SELECT simulation: SELECT ... FROM tableName
-    const selectMatch = sql.match(/select\s+.*?\s+from\s+([a-zA-Z0-9_]+)/i);
+    // SELECT ... FROM tableName [WHERE ...]
+    const selectMatch = sql.match(/select\s+.*?\s+from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+))?/i);
     if (selectMatch) {
       const tableName = selectMatch[1];
+      const whereClause = selectMatch[2];
       const table = this.tables.get(tableName) ?? [];
-      return ok([...table] as unknown as T[]);
+      const matching = whereClause
+        ? table.filter((row) => this.evaluateWhere(row, whereClause, params))
+        : table;
+      return ok([...matching] as unknown as T[]);
     }
 
     return ok([]);
   }
 
+  private evaluateWhere(
+    row: Record<string, unknown>,
+    whereClause: string,
+    params: unknown[],
+  ): boolean {
+    let paramIdx = 0;
+    const replaced = whereClause.replace(/\?/g, () => `__PARAM_${paramIdx++}__`);
+
+    const orBranches = replaced.split(/\s+OR\s+/i);
+    return orBranches.some((branch) => {
+      const andConditions = branch.split(/\s+AND\s+/i);
+      return andConditions.every((cond) => {
+        const trimmed = cond.trim().replace(/^\(|\)$/g, '').trim();
+
+        // col != val or col <> val
+        const neMatch = trimmed.match(/^([a-zA-Z0-9_]+)\s*(!=|<>)\s*(.+)$/i);
+        if (neMatch) {
+          const col = neMatch[1];
+          const valToken = neMatch[3].trim();
+          const targetVal = this.resolveValue(valToken, params);
+          return row[col] !== targetVal;
+        }
+
+        // col <= val
+        const lteMatch = trimmed.match(/^([a-zA-Z0-9_]+)\s*<=\s*(.+)$/i);
+        if (lteMatch) {
+          const col = lteMatch[1];
+          const valToken = lteMatch[2].trim();
+          const targetVal = Number(this.resolveValue(valToken, params));
+          return Number(row[col]) <= targetVal;
+        }
+
+        // col >= val
+        const gteMatch = trimmed.match(/^([a-zA-Z0-9_]+)\s*>=\s*(.+)$/i);
+        if (gteMatch) {
+          const col = gteMatch[1];
+          const valToken = gteMatch[2].trim();
+          const targetVal = Number(this.resolveValue(valToken, params));
+          return Number(row[col]) >= targetVal;
+        }
+
+        // col < val
+        const ltMatch = trimmed.match(/^([a-zA-Z0-9_]+)\s*<\s*(.+)$/i);
+        if (ltMatch) {
+          const col = ltMatch[1];
+          const valToken = ltMatch[2].trim();
+          const targetVal = Number(this.resolveValue(valToken, params));
+          return Number(row[col]) < targetVal;
+        }
+
+        // col > val
+        const gtMatch = trimmed.match(/^([a-zA-Z0-9_]+)\s*>\s*(.+)$/i);
+        if (gtMatch) {
+          const col = gtMatch[1];
+          const valToken = gtMatch[2].trim();
+          const targetVal = Number(this.resolveValue(valToken, params));
+          return Number(row[col]) > targetVal;
+        }
+
+        // col LIKE val
+        const likeMatch = trimmed.match(/^([a-zA-Z0-9_]+)\s+LIKE\s+(.+)$/i);
+        if (likeMatch) {
+          const col = likeMatch[1];
+          const valToken = likeMatch[2].trim();
+          const pattern = String(this.resolveValue(valToken, params));
+          const regexStr =
+            '^' +
+            pattern
+              .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+              .replace(/%/g, '.*')
+              .replace(/_/g, '.') +
+            '$';
+          const regex = new RegExp(regexStr, 'i');
+          return regex.test(String(row[col] ?? ''));
+        }
+
+        // col = val
+        const eqMatch = trimmed.match(/^([a-zA-Z0-9_]+)\s*=\s*(.+)$/i);
+        if (eqMatch) {
+          const col = eqMatch[1];
+          const valToken = eqMatch[2].trim();
+          const targetVal = this.resolveValue(valToken, params);
+          return row[col] === targetVal;
+        }
+
+        return true;
+      });
+    });
+  }
+
+  private resolveValue(token: string, params: unknown[]): unknown {
+    const paramMatch = token.match(/^__PARAM_(\d+)__$/);
+    if (paramMatch) {
+      const idx = Number(paramMatch[1]);
+      return params[idx];
+    }
+    if (
+      (token.startsWith("'") && token.endsWith("'")) ||
+      (token.startsWith('"') && token.endsWith('"'))
+    ) {
+      return token.slice(1, -1);
+    }
+    if (!isNaN(Number(token))) {
+      return Number(token);
+    }
+    return token;
+  }
 
   async transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<Result<T, StorageError>> {
     if (this.isClosed) {

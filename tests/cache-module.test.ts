@@ -8,6 +8,7 @@ import {
 import {
   MemorySqlDatabase,
 } from '@/backend/platform';
+import { NodeSqliteDatabase } from './helpers/node-sqlite-database';
 import {
   CacheManager,
   LruCache,
@@ -69,63 +70,140 @@ describe('Phase 4: Cache Module', () => {
     });
   });
 
-  describe('SqlCacheStore', () => {
-    it('initializes schema and persists entries in SQLite', async () => {
-      const db = new MemorySqlDatabase();
-      const store = new SqlCacheStore(db);
+  describe('SqlCacheStore (Real SQLite vs Memory Fake Contract Tests)', () => {
+    const databases = [
+      { name: 'MemorySqlDatabase (in-memory fake)', createDb: () => new MemorySqlDatabase() },
+      {
+        name: 'NodeSqliteDatabase (real SQLite via node:sqlite)',
+        createDb: () => new NodeSqliteDatabase(':memory:'),
+      },
+    ];
 
-      await store.init();
-      await store.set({
-        key: 'test:1',
-        dataType: 'search',
-        scope: 'guest',
-        value: { query: 'rock' },
-        sizeBytes: 25,
-        createdAt: 1000,
-        freshUntil: 2000,
-        staleUntil: 5000,
+    databases.forEach(({ name, createDb }) => {
+      describe(name, () => {
+        it('initializes schema and persists entries', async () => {
+          const db = createDb();
+          const store = new SqlCacheStore(db);
+
+          await store.init();
+          await store.set({
+            key: 'test:1',
+            dataType: 'search',
+            scope: 'guest',
+            value: { query: 'rock' },
+            sizeBytes: 25,
+            createdAt: 1000,
+            freshUntil: 2000,
+            staleUntil: 5000,
+          });
+
+          const entry = await store.get<{ query: string }>('test:1');
+          expect(entry).toBeDefined();
+          expect(entry?.key).toBe('test:1');
+          expect(entry?.dataType).toBe('search');
+          expect(entry?.value).toEqual({ query: 'rock' });
+          expect(await store.count()).toBe(1);
+        });
+
+        it('replaces existing entry on primary key collision', async () => {
+          const db = createDb();
+          const store = new SqlCacheStore(db);
+          await store.init();
+
+          await store.set({
+            key: 'item:1',
+            dataType: 'album',
+            scope: 'guest',
+            value: { title: 'Old Title' },
+            sizeBytes: 10,
+            createdAt: 100,
+            freshUntil: 200,
+            staleUntil: 500,
+          });
+
+          await store.set({
+            key: 'item:1',
+            dataType: 'album',
+            scope: 'guest',
+            value: { title: 'New Title' },
+            sizeBytes: 10,
+            createdAt: 200,
+            freshUntil: 300,
+            staleUntil: 600,
+          });
+
+          const entry = await store.get<{ title: string }>('item:1');
+          expect(entry?.value.title).toBe('New Title');
+          expect(await store.count()).toBe(1);
+        });
+
+        it('prunes expired entries based on staleUntil threshold', async () => {
+          const db = createDb();
+          const store = new SqlCacheStore(db);
+          await store.init();
+
+          await store.set({
+            key: 'old:1',
+            dataType: 'home',
+            scope: 'guest',
+            value: {},
+            sizeBytes: 2,
+            createdAt: 100,
+            freshUntil: 200,
+            staleUntil: 500,
+          });
+
+          await store.set({
+            key: 'fresh:1',
+            dataType: 'home',
+            scope: 'guest',
+            value: {},
+            sizeBytes: 2,
+            createdAt: 600,
+            freshUntil: 800,
+            staleUntil: 1500,
+          });
+
+          const pruned = await store.deleteExpired(600);
+          expect(pruned).toBe(1);
+          expect(await store.get('old:1')).toBeNull();
+          expect(await store.get('fresh:1')).not.toBeNull();
+        });
+
+        it('clears user-scoped entries while keeping guest entries intact', async () => {
+          const db = createDb();
+          const store = new SqlCacheStore(db);
+          await store.init();
+
+          await store.set({
+            key: 'browse:home:auth:guest',
+            dataType: 'home',
+            scope: 'guest',
+            value: { feed: 'guest' },
+            sizeBytes: 10,
+            createdAt: 100,
+            freshUntil: 500,
+            staleUntil: 1000,
+          });
+
+          await store.set({
+            key: 'browse:home:auth:user:123',
+            dataType: 'home',
+            scope: 'user:123',
+            value: { feed: 'user' },
+            sizeBytes: 10,
+            createdAt: 100,
+            freshUntil: 500,
+            staleUntil: 1000,
+          });
+
+          const removed = await store.clearUserScoped();
+          expect(removed).toBe(1);
+          expect(await store.get('browse:home:auth:guest')).not.toBeNull();
+          expect(await store.get('browse:home:auth:user:123')).toBeNull();
+          expect(await store.count()).toBe(1);
+        });
       });
-
-      const entry = await store.get<{ query: string }>('test:1');
-      expect(entry).toBeDefined();
-      expect(entry?.key).toBe('test:1');
-      expect(entry?.dataType).toBe('search');
-      expect(entry?.value).toEqual({ query: 'rock' });
-      expect(await store.count()).toBe(1);
-    });
-
-    it('prunes expired entries based on staleUntil threshold', async () => {
-      const db = new MemorySqlDatabase();
-      const store = new SqlCacheStore(db);
-      await store.init();
-
-      await store.set({
-        key: 'old:1',
-        dataType: 'home',
-        scope: 'guest',
-        value: {},
-        sizeBytes: 2,
-        createdAt: 100,
-        freshUntil: 200,
-        staleUntil: 500,
-      });
-
-      await store.set({
-        key: 'fresh:1',
-        dataType: 'home',
-        scope: 'guest',
-        value: {},
-        sizeBytes: 2,
-        createdAt: 600,
-        freshUntil: 800,
-        staleUntil: 1500,
-      });
-
-      // Prune entries stale before now=600
-      const pruned = await store.deleteExpired(600);
-      expect(pruned).toBe(1);
-      expect(await store.get('old:1')).toBeNull();
-      expect(await store.get('fresh:1')).not.toBeNull();
     });
   });
 
@@ -295,6 +373,100 @@ describe('Phase 4: Cache Module', () => {
       expect(stats.sqlCount).toBe(0);
       expect(stats.hits).toBe(0);
       expect(stats.misses).toBe(0);
+    });
+
+    it('keeps stream URLs in in-memory tier only and never persists them to SQLite', async () => {
+      const db = new NodeSqliteDatabase(':memory:');
+      const manager = new CacheManager({ sqlDatabase: db });
+
+      const streamKey = CacheKeyBuilder.stream('9RfVp-GhKfs');
+      await manager.put(
+        streamKey,
+        'stream',
+        { url: 'https://googlevideo.com/videoplayback?ip=1.2.3.4' },
+        { expiresAt: Date.now() + 3600_000 },
+      );
+
+      // Present in L1 memory
+      const memRes = await manager.get(streamKey);
+      expect(memRes.isHit).toBe(true);
+
+      // Initialize a persistent entry to ensure SQLite schema is created
+      await manager.put('search:test', 'search', { ok: true });
+      const stats = await manager.getStats();
+      expect(stats.sqlCount).toBe(1); // Only search:test is in SQLite, not stream!
+
+      // Never persisted to L2 SQLite because signed stream URLs are IP-bound
+      const sqlRows = await db.query('SELECT * FROM cache_entries WHERE key = ?', [streamKey]);
+      expect(sqlRows.ok).toBe(true);
+      if (sqlRows.ok) {
+        expect(sqlRows.value.length).toBe(0);
+      }
+    });
+
+    it('invalidates stream entry so subsequent call triggers re-resolution', async () => {
+      const manager = new CacheManager();
+      const videoId = '9RfVp-GhKfs';
+      const streamKey = CacheKeyBuilder.stream(videoId);
+
+      await manager.put(streamKey, 'stream', { url: 'https://initial-stream.com' });
+      expect((await manager.get(streamKey)).isHit).toBe(true);
+
+      // Invalidate stream
+      await manager.invalidateStream(videoId);
+      expect((await manager.get(streamKey)).isHit).toBe(false);
+    });
+
+    it('clears user-scoped data across memory and SQLite on logout while keeping guest cache intact', async () => {
+      const db = new NodeSqliteDatabase(':memory:');
+      const manager = new CacheManager({ sqlDatabase: db });
+
+      // Add guest entry
+      const guestKey = CacheKeyBuilder.home('guest');
+      await manager.put(guestKey, 'home', { feed: 'guest-feed' }, { scope: 'guest' });
+
+      // Add user entry
+      const userKey = CacheKeyBuilder.home('user:alice');
+      await manager.put(userKey, 'home', { feed: 'alice-feed' }, { scope: 'user:alice' });
+
+      expect((await manager.get(guestKey)).isHit).toBe(true);
+      expect((await manager.get(userKey)).isHit).toBe(true);
+
+      // Logout: clear user-scoped data
+      await manager.clearUserScopedData();
+
+      // Guest remains warm in cache
+      expect((await manager.get(guestKey)).isHit).toBe(true);
+      // User data is purged from memory and SQLite
+      expect((await manager.get(userKey)).isHit).toBe(false);
+
+      const userSqlRows = await db.query('SELECT * FROM cache_entries WHERE key = ?', [userKey]);
+      expect(userSqlRows.ok).toBe(true);
+      if (userSqlRows.ok) {
+        expect(userSqlRows.value.length).toBe(0);
+      }
+    });
+
+    it('clears memory tier only, enabling cold start simulation restored from SQLite', async () => {
+      const db = new NodeSqliteDatabase(':memory:');
+      const manager = new CacheManager({ sqlDatabase: db });
+
+      await manager.put('search:test:filter:all', 'search', { results: [1, 2, 3] });
+      let stats = await manager.getStats();
+      expect(stats.inMemoryCount).toBe(1);
+      expect(stats.sqlCount).toBe(1);
+
+      // Clear memory tier only
+      manager.clearMemoryTier();
+      stats = await manager.getStats();
+      expect(stats.inMemoryCount).toBe(0);
+      expect(stats.sqlCount).toBe(1); // SQLite persists!
+
+      // Fetch restores from SQLite into L1 memory
+      const restored = await manager.get('search:test:filter:all');
+      expect(restored.isHit).toBe(true);
+      stats = await manager.getStats();
+      expect(stats.inMemoryCount).toBe(1); // Restored into memory!
     });
   });
 

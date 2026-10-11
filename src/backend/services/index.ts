@@ -105,6 +105,9 @@ export interface Backend {
     options?: NextOptions & GetOrFetchOptions,
   ): Promise<Result<NextQueueResponse, AppError>>;
   getSearchSuggestions(query: string, options?: EndpointOptions & GetOrFetchOptions): Promise<Result<SearchSuggestionsResponse, AppError>>;
+  invalidateStream(videoId: string): Promise<void>;
+  clearUserScopedData(): Promise<void>;
+  clearMemoryTier(): void;
   clearCache(): Promise<void>;
   getCacheStats(): Promise<CacheStats>;
 }
@@ -162,6 +165,9 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     getPlaylist: (playlistId, options) => repository.getPlaylist(playlistId, options),
     getNext: (videoId, options) => repository.getNext(videoId, options),
     getSearchSuggestions: (query, options) => repository.getSearchSuggestions(query, options),
+    invalidateStream: (videoId) => repository.invalidateStream(videoId),
+    clearUserScopedData: () => repository.clearUserScopedData(),
+    clearMemoryTier: () => repository.clearMemoryTier(),
     clearCache: () => cache.clear(),
     getCacheStats: () => cache.getStats(),
   };

@@ -18,6 +18,11 @@ export interface CachePolicy {
   freshTtlMs: number;
   /** Duration in ms that cached data can be served stale while refreshing in the background */
   staleTtlMs: number;
+  /**
+   * Whether entries under this policy should be persisted to SQLite. Default: true.
+   * Ephemeral or IP-tied data (such as signed stream URLs) MUST be false to remain in-memory only.
+   */
+  persistToSql?: boolean;
 }
 
 export const DEFAULT_CACHE_POLICIES: Record<CacheDataType, CachePolicy> = {
@@ -46,9 +51,12 @@ export const DEFAULT_CACHE_POLICIES: Record<CacheDataType, CachePolicy> = {
     staleTtlMs: 2 * 60 * 60 * 1000, // 2 hours
   },
   stream: {
-    // Expiry-aware: dynamic safety window before stream URL expires
+    // Expiry-aware: dynamic safety window before stream URL expires.
+    // In-memory tier ONLY: signed stream URLs contain client IP bindings (ip=...)
+    // and fail with HTTP 403 upon network change (e.g. Wi-Fi <-> Cellular).
     freshTtlMs: 5 * 60 * 1000, // 5 minutes default
     staleTtlMs: 10 * 60 * 1000, // 10 minutes default
+    persistToSql: false,
   },
 };
 

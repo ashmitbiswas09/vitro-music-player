@@ -25,6 +25,7 @@ import {
   type CacheStats,
   type GetOrFetchOptions,
   DEFAULT_CACHE_POLICIES,
+  CacheKeyBuilder,
 } from './types';
 
 export interface CacheManagerOptions {
@@ -219,8 +220,8 @@ export class CacheManager {
     // Store in L1
     this.lru.set(key, entry as CacheEntry);
 
-    // Store in L2
-    if (this.sqlStore) {
+    // Store in L2 SQLite only if persistence is permitted for this data type (never for stream URLs)
+    if (this.sqlStore && policy.persistToSql !== false) {
       try {
         await this.sqlStore.set(entry);
       } catch (err) {
@@ -259,6 +260,54 @@ export class CacheManager {
     if (this.sqlStore) {
       await this.sqlStore.delete(key);
     }
+  }
+
+  /**
+   * Invalidates a cached stream for a given videoId, dropping it from the in-memory tier.
+   *
+   * Why: YouTube signed stream URLs are cryptographically bound to the client IP address (via the `ip=` parameter).
+   * When switching network interfaces (e.g. Wi-Fi to cellular), existing signed stream URLs immediately break
+   * and return HTTP 403 Forbidden. Invalidating the stream drops the entry so the subsequent playback or resolve call
+   * re-resolves a fresh stream URL with the active IP.
+   */
+  async invalidateStream(videoId: string): Promise<void> {
+    const key = CacheKeyBuilder.stream(videoId);
+    this.lru.delete(key);
+    if (this.sqlStore) {
+      await this.sqlStore.delete(key);
+    }
+    logger.debug(`[CacheManager] Invalidated stream for ${videoId}`);
+  }
+
+  /**
+   * Clears all user-scoped cached data (for logout or account switch), preserving guest data.
+   * Drops matching entries from both L1 memory LRU and L2 SQLite persistence.
+   */
+  async clearUserScopedData(): Promise<void> {
+    // 1. Clear matching entries from L1 memory LRU
+    const memoryKeys = this.lru.keys();
+    for (const key of memoryKeys) {
+      if (key.includes('auth:user:') || key.startsWith('user:')) {
+        this.lru.delete(key);
+      }
+    }
+
+    // 2. Clear matching entries from L2 SQLite store
+    if (this.sqlStore) {
+      await this.sqlStore.clearUserScoped();
+    }
+
+    logger.info('[CacheManager] Cleared user-scoped cache entries on logout');
+  }
+
+  /**
+   * Clears only the L1 in-memory tier, keeping SQLite persistence intact.
+   * Used for cold-start testing and low-memory pressure management.
+   */
+  clearMemoryTier(): void {
+    this.lru.clear();
+    this.deduper.clear();
+    logger.debug('[CacheManager] Cleared in-memory tier');
   }
 
   /**

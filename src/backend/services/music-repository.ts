@@ -275,6 +275,31 @@ export class MusicRepository {
     await this.cache.clear();
   }
 
+  /**
+   * Invalidates a cached stream for a given videoId, dropping it from the in-memory tier.
+   *
+   * Why: YouTube signed stream URLs are bound to the client IP address (`ip=` parameter)
+   * and fail with HTTP 403 upon network changes (e.g. Wi-Fi to cellular). Dropping the entry
+   * guarantees that the next request will re-resolve fresh playable audio streams.
+   */
+  async invalidateStream(videoId: string): Promise<void> {
+    await this.cache.invalidateStream(videoId);
+  }
+
+  /**
+   * Clears all user-scoped cached data (for logout or account switch), preserving guest data.
+   */
+  async clearUserScopedData(): Promise<void> {
+    await this.cache.clearUserScopedData();
+  }
+
+  /**
+   * Clears only the L1 in-memory tier, preserving SQLite persistence.
+   */
+  clearMemoryTier(): void {
+    this.cache.clearMemoryTier();
+  }
+
   async getCacheStats(): Promise<CacheStats> {
     return this.cache.getStats();
   }

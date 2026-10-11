@@ -110,6 +110,17 @@ export class SqlCacheStore {
     await this.db.execute('DELETE FROM cache_entries');
   }
 
+  /**
+   * Deletes all user-scoped cache entries (logout), preserving guest entries.
+   */
+  async clearUserScoped(): Promise<number> {
+    await this.init();
+    const res = await this.db.execute(
+      "DELETE FROM cache_entries WHERE scope != 'guest' OR key LIKE '%auth:user:%' OR key LIKE 'user:%'",
+    );
+    return isOk(res) ? res.value.rowsAffected : 0;
+  }
+
   async count(): Promise<number> {
     await this.init();
     const res = await this.db.query<{ count: number }>(
