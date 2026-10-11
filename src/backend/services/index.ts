@@ -37,9 +37,17 @@ import {
   type ResolveOptions,
   type FullVerificationOptions,
 } from '@/backend/streaming';
-import type { Result, AppError, StreamError } from '@/backend/core';
+import {
+  CacheManager,
+  PrefetchPlanner,
+  type CacheStats,
+  type GetOrFetchOptions,
+} from '@/backend/cache';
+import type { Result, AppError, StreamError, Clock } from '@/backend/core';
+import { MusicRepository } from './music-repository';
 
 export const SERVICES_MODULE_NAME = 'services' as const;
+export * from './music-repository';
 
 export interface BackendAdapters {
   httpClient?: HttpClient;
@@ -47,9 +55,13 @@ export interface BackendAdapters {
   keyValueStore?: KeyValueStore;
   sqlDatabase?: SqlDatabase;
   fileStore?: FileStore;
+  clock?: Clock;
 }
 
 export interface Backend {
+  readonly repository: MusicRepository;
+  readonly cache: CacheManager;
+  readonly prefetcher: PrefetchPlanner;
   readonly innertube: InnertubeClient;
   readonly streaming: StreamResolver;
   readonly adapters: {
@@ -61,11 +73,11 @@ export interface Backend {
   };
   search(
     query: string,
-    options?: SearchOptions,
+    options?: SearchOptions & GetOrFetchOptions,
   ): Promise<Result<SearchResponse, AppError>>;
   resolveStream(
     videoId: string,
-    options?: ResolveOptions,
+    options?: ResolveOptions & GetOrFetchOptions,
   ): Promise<Result<ResolvedStream, StreamError>>;
   verifyStream(
     videoId: string,
@@ -84,15 +96,17 @@ export interface Backend {
     resolved: ResolvedStream,
     options?: FullVerificationOptions,
   ): Promise<FullVerificationResult>;
-  getHome(options?: EndpointOptions): Promise<Result<HomeFeedResponse, AppError>>;
-  getAlbum(browseId: string, options?: EndpointOptions): Promise<Result<AlbumDetailResponse, AppError>>;
-  getArtist(browseId: string, options?: EndpointOptions): Promise<Result<ArtistDetailResponse, AppError>>;
-  getPlaylist(playlistId: string, options?: EndpointOptions): Promise<Result<PlaylistDetailResponse, AppError>>;
+  getHome(options?: EndpointOptions & GetOrFetchOptions): Promise<Result<HomeFeedResponse, AppError>>;
+  getAlbum(browseId: string, options?: EndpointOptions & GetOrFetchOptions): Promise<Result<AlbumDetailResponse, AppError>>;
+  getArtist(browseId: string, options?: EndpointOptions & GetOrFetchOptions): Promise<Result<ArtistDetailResponse, AppError>>;
+  getPlaylist(playlistId: string, options?: EndpointOptions & GetOrFetchOptions): Promise<Result<PlaylistDetailResponse, AppError>>;
   getNext(
     videoId: string,
-    options?: NextOptions,
+    options?: NextOptions & GetOrFetchOptions,
   ): Promise<Result<NextQueueResponse, AppError>>;
-  getSearchSuggestions(query: string, options?: EndpointOptions): Promise<Result<SearchSuggestionsResponse, AppError>>;
+  getSearchSuggestions(query: string, options?: EndpointOptions & GetOrFetchOptions): Promise<Result<SearchSuggestionsResponse, AppError>>;
+  clearCache(): Promise<void>;
+  getCacheStats(): Promise<CacheStats>;
 }
 
 export function createBackend(adapters: BackendAdapters = {}): Backend {
@@ -101,6 +115,12 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
   const sqlDatabase = adapters.sqlDatabase ?? new MemorySqlDatabase();
   const keyValueStore = adapters.keyValueStore ?? new MemoryKeyValueStore();
   const fileStore = adapters.fileStore ?? new MemoryFileStore();
+  const clock = adapters.clock;
+
+  const cache = new CacheManager({
+    sqlDatabase,
+    clock,
+  });
 
   const innertube = new InnertubeClient({
     httpClient,
@@ -111,7 +131,18 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     httpClient,
   });
 
+  const repository = new MusicRepository({
+    innertube,
+    streamResolver: streaming,
+    cache,
+  });
+
+  const prefetcher = new PrefetchPlanner(cache, streaming, clock);
+
   return {
+    repository,
+    cache,
+    prefetcher,
     innertube,
     streaming,
     adapters: {
@@ -121,15 +152,17 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
       sqlDatabase,
       fileStore,
     },
-    search: (query, options) => innertube.search(query, options),
-    resolveStream: (videoId, options) => streaming.resolve(videoId, options),
+    search: (query, options) => repository.search(query, options),
+    resolveStream: (videoId, options) => repository.resolveStream(videoId, options),
     verifyStream: (videoId, options) => streaming.resolveAndVerify(videoId, options),
     verifyStreamFull: (resolved, options) => streaming.verifyFull(resolved, options),
-    getHome: (options) => innertube.getHome(options),
-    getAlbum: (browseId, options) => innertube.getAlbum(browseId, options),
-    getArtist: (browseId, options) => innertube.getArtist(browseId, options),
-    getPlaylist: (playlistId, options) => innertube.getPlaylist(playlistId, options),
-    getNext: (videoId, options) => innertube.getNext(videoId, options),
-    getSearchSuggestions: (query, options) => innertube.getSearchSuggestions(query, options),
+    getHome: (options) => repository.getHome(options),
+    getAlbum: (browseId, options) => repository.getAlbum(browseId, options),
+    getArtist: (browseId, options) => repository.getArtist(browseId, options),
+    getPlaylist: (playlistId, options) => repository.getPlaylist(playlistId, options),
+    getNext: (videoId, options) => repository.getNext(videoId, options),
+    getSearchSuggestions: (query, options) => repository.getSearchSuggestions(query, options),
+    clearCache: () => cache.clear(),
+    getCacheStats: () => cache.getStats(),
   };
 }

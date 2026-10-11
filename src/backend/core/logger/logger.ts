@@ -271,6 +271,9 @@ export function createLogger(options?: LoggerOptions): Logger {
   return new RedactingLogger(options);
 }
 
+export const logger: Logger = createLogger();
+
+
 export class SilentLogger implements Logger {
   debug(_message: string, _context?: LogContext): void {}
   info(_message: string, _context?: LogContext): void {}

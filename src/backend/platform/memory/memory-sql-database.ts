@@ -27,10 +27,15 @@ export class MemorySqlDatabase implements SqlDatabase {
       return ok({ rows: [], rowsAffected: 0 });
     }
 
-    // Basic INSERT simulation: INSERT INTO tableName (col1, col2) VALUES (?, ?)
-    const insertMatch = sql.match(/insert\s+(?:or\s+replace\s+)?into\s+([a-zA-Z0-9_]+)/i);
+    // Basic INSERT simulation: INSERT OR REPLACE INTO tableName (col1, col2) VALUES (?, ?)
+    const insertMatch = sql.match(
+      /insert\s+(?:or\s+replace\s+)?into\s+([a-zA-Z0-9_]+)\s*(?:\(([^)]+)\))?/i,
+    );
     if (insertMatch) {
       const tableName = insertMatch[1];
+      const columnNames = insertMatch[2]
+        ? insertMatch[2].split(',').map((c) => c.trim())
+        : [];
       let table = this.tables.get(tableName);
       if (!table) {
         table = [];
@@ -40,8 +45,68 @@ export class MemorySqlDatabase implements SqlDatabase {
         _id: table.length + 1,
         _params: params,
       };
+      if (columnNames.length > 0) {
+        for (let i = 0; i < columnNames.length; i++) {
+          newRow[columnNames[i]] = params[i];
+        }
+      }
+
+      // Check if primary key (key or id) exists in table to replace
+      const pkName = columnNames.includes('key')
+        ? 'key'
+        : columnNames.includes('id')
+          ? 'id'
+          : undefined;
+      if (pkName && newRow[pkName] !== undefined) {
+        const existingIdx = table.findIndex((r) => r[pkName] === newRow[pkName]);
+        if (existingIdx !== -1) {
+          table[existingIdx] = newRow;
+          return ok({
+            rows: [],
+            rowsAffected: 1,
+            insertId: (newRow._id as number) ?? existingIdx + 1,
+          });
+        }
+      }
+
       table.push(newRow);
       return ok({ rows: [], rowsAffected: 1, insertId: table.length });
+    }
+
+    // DELETE FROM tableName WHERE col = ?
+    const deleteWhereMatch = sql.match(
+      /delete\s+from\s+([a-zA-Z0-9_]+)\s+where\s+([a-zA-Z0-9_]+)\s*=\s*\?/i,
+    );
+    if (deleteWhereMatch) {
+      const tableName = deleteWhereMatch[1];
+      const colName = deleteWhereMatch[2];
+      const table = this.tables.get(tableName);
+      if (table) {
+        const initialLen = table.length;
+        const filtered = table.filter((r) => r[colName] !== params[0]);
+        this.tables.set(tableName, filtered);
+        return ok({ rows: [], rowsAffected: initialLen - filtered.length });
+      }
+      return ok({ rows: [], rowsAffected: 0 });
+    }
+
+    // DELETE FROM tableName WHERE col < ?
+    const deleteLtMatch = sql.match(
+      /delete\s+from\s+([a-zA-Z0-9_]+)\s+where\s+([a-zA-Z0-9_]+)\s*<\s*\?/i,
+    );
+    if (deleteLtMatch) {
+      const tableName = deleteLtMatch[1];
+      const colName = deleteLtMatch[2];
+      const table = this.tables.get(tableName);
+      if (table) {
+        const initialLen = table.length;
+        const filtered = table.filter(
+          (r) => Number(r[colName]) >= Number(params[0]),
+        );
+        this.tables.set(tableName, filtered);
+        return ok({ rows: [], rowsAffected: initialLen - filtered.length });
+      }
+      return ok({ rows: [], rowsAffected: 0 });
     }
 
     // Basic DELETE simulation: DELETE FROM tableName
@@ -61,10 +126,32 @@ export class MemorySqlDatabase implements SqlDatabase {
 
   async query<T = unknown>(
     sql: string,
-    _params: unknown[] = [],
+    params: unknown[] = [],
   ): Promise<Result<T[], StorageError>> {
     if (this.isClosed) {
       return ok([]);
+    }
+
+    // SELECT COUNT(*) as count FROM tableName
+    const countMatch = sql.match(
+      /select\s+count\(\*\)\s+(?:as\s+count\s+)?from\s+([a-zA-Z0-9_]+)/i,
+    );
+    if (countMatch) {
+      const tableName = countMatch[1];
+      const table = this.tables.get(tableName) ?? [];
+      return ok([{ count: table.length }] as unknown as T[]);
+    }
+
+    // SELECT ... FROM tableName WHERE col = ?
+    const selectWhereMatch = sql.match(
+      /select\s+.*?\s+from\s+([a-zA-Z0-9_]+)\s+where\s+([a-zA-Z0-9_]+)\s*=\s*\?/i,
+    );
+    if (selectWhereMatch) {
+      const tableName = selectWhereMatch[1];
+      const colName = selectWhereMatch[2];
+      const table = this.tables.get(tableName) ?? [];
+      const matching = table.filter((r) => r[colName] === params[0]);
+      return ok([...matching] as unknown as T[]);
     }
 
     // Basic SELECT simulation: SELECT ... FROM tableName
@@ -77,6 +164,7 @@ export class MemorySqlDatabase implements SqlDatabase {
 
     return ok([]);
   }
+
 
   async transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<Result<T, StorageError>> {
     if (this.isClosed) {

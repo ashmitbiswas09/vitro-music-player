@@ -16,6 +16,7 @@ import {
   RnFileStore,
 } from '@/backend/platform/rn';
 import { redactString } from '@/backend/core';
+import { CacheKeyBuilder } from '@/backend/cache';
 
 export function DebugScreen() {
   const [output, setOutput] = useState<string>('Ready. Press a button below to test.');
@@ -163,6 +164,71 @@ export function DebugScreen() {
     }
   };
 
+  const runCacheTest = async () => {
+    setIsLoading(true);
+    setOutput('[DEV ONLY] Running Cache Test: Cold vs Warm comparison on Emulator...');
+    try {
+      // 1. Clear cache to ensure truly cold initial state
+      await backend.clearCache();
+
+      // 2. Cold Call (fetching via InnerTube through repository)
+      const coldStart = Date.now();
+      const coldRes = await backend.search('Radiohead', { filter: 'all' });
+      const coldDurationMs = Date.now() - coldStart;
+
+      if (!coldRes.ok) {
+        setOutput(`[DEV ONLY] COLD CALL FAILED (${coldDurationMs}ms):\n${coldRes.error.message}`);
+        return;
+      }
+
+      // 3. Warm Call (Second call must be served from cache in under 100ms)
+      const warmStart = Date.now();
+      const warmRes = await backend.search('Radiohead', { filter: 'all' });
+      const warmDurationMs = Date.now() - warmStart;
+
+      if (!warmRes.ok) {
+        setOutput(`[DEV ONLY] WARM CALL FAILED (${warmDurationMs}ms):\n${warmRes.error.message}`);
+        return;
+      }
+
+      // 4. Retrieve stats and inspect cache key
+      const stats = await backend.getCacheStats();
+      const cacheKey = CacheKeyBuilder.search('Radiohead', 'all');
+      const inspect = await backend.cache.get(cacheKey);
+
+      const isSub100ms = warmDurationMs < 100;
+      const speedup = coldDurationMs / Math.max(warmDurationMs, 1);
+
+      const lines = [
+        '=== CACHE TEST: COLD vs WARM (EMULATOR) ===',
+        `Cold Call Time:  ${coldDurationMs}ms (Network + Parse)`,
+        `Warm Call Time:  ${warmDurationMs}ms (Cache Hit)`,
+        `Target < 100ms:  ${isSub100ms ? 'PASS (Under 100ms)' : 'FAIL'}`,
+        `Speedup Factor:  ${speedup.toFixed(1)}x faster`,
+        '',
+        '--- Cache Inspection ---',
+        `Key:             ${cacheKey}`,
+        `Status:          ${inspect.status.toUpperCase()}`,
+        `Is Hit:          ${inspect.isHit ? 'YES' : 'NO'}`,
+        `Is Stale:        ${inspect.isStale ? 'YES' : 'NO'}`,
+        `Payload Match:   ${coldRes.value.items.length} items (cold) == ${warmRes.value.items.length} items (warm)`,
+        '',
+        '--- Cache Statistics ---',
+        `Hits:            ${stats.hits}`,
+        `Misses:          ${stats.misses}`,
+        `In-Memory Items: ${stats.inMemoryCount}`,
+        `In-Memory Size:  ${stats.inMemorySizeBytes} bytes`,
+        `SQLite Items:    ${stats.sqlCount}`,
+      ];
+
+      setOutput(lines.join('\n'));
+    } catch (caught) {
+      setOutput(`[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.header}>DEV ONLY - BACKEND DEBUG SCREEN</Text>
@@ -174,6 +240,15 @@ export function DebugScreen() {
         <Button title="Resolve & Verify" onPress={runResolveAndVerify} disabled={isLoading} />
         <View style={styles.spacer} />
         <Button title="Home Feed" onPress={runHomeFeed} disabled={isLoading} />
+      </View>
+
+      <View style={styles.buttonRow}>
+        <Button
+          title="Test Cache (Cold vs Warm)"
+          onPress={runCacheTest}
+          disabled={isLoading}
+          color="#2e7d32"
+        />
       </View>
 
       <ScrollView style={styles.outputBox} contentContainerStyle={styles.scrollContent}>

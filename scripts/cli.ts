@@ -18,6 +18,7 @@ import {
   handlePlaylist,
   handleNext,
   handleSuggest,
+  handleCache,
 } from './commands';
 
 const coldStartBegin = performance.now();
@@ -153,6 +154,12 @@ async function main(): Promise<void> {
         }
       }
       timingDetails = await handleHealth(mode);
+      break;
+    }
+    case 'cache': {
+      const subcommand = args[1] ?? 'stats';
+      const targetArg = args[2];
+      timingDetails = await handleCache(subcommand, targetArg);
       break;
     }
     default:
