@@ -29,6 +29,75 @@ export interface SearchOptions {
   signal?: AbortSignal;
 }
 
+export interface SearchSuggestionsResponse {
+  query: string;
+  suggestions: string[];
+  parseDurationMs: number;
+  responseSizeBytes: number;
+}
+
+export interface HomeSection {
+  title: string;
+  items: SearchResultItem[];
+}
+
+export interface HomeFeedResponse {
+  sections: HomeSection[];
+  continuationToken?: string;
+  parseDurationMs: number;
+  responseSizeBytes: number;
+}
+
+export interface AlbumDetailResponse {
+  album: Album;
+  parseDurationMs: number;
+  responseSizeBytes: number;
+}
+
+export interface ArtistDetailResponse {
+  artist: Artist;
+  albums: Album[];
+  singles: Album[];
+  parseDurationMs: number;
+  responseSizeBytes: number;
+}
+
+export interface PlaylistDetailResponse {
+  playlist: Playlist;
+  parseDurationMs: number;
+  responseSizeBytes: number;
+}
+
+export interface NextQueueResponse {
+  currentTrack?: Track;
+  queue: Track[];
+  playlistId?: string;
+  continuationToken?: string;
+  parseDurationMs: number;
+  responseSizeBytes: number;
+}
+
+export interface ContinuationResponse {
+  items: SearchResultItem[];
+  continuationToken?: string;
+  parseDurationMs: number;
+  responseSizeBytes: number;
+}
+
+export interface EndpointOptions {
+  signal?: AbortSignal;
+  visitorData?: string;
+}
+
+export interface NextOptions extends EndpointOptions {
+  playlistId?: string;
+  continuationToken?: string;
+}
+
+export interface ContinuationOptions extends EndpointOptions {
+  continuationToken: string;
+}
+
 export interface InnertubeClientOptions {
   httpClient: HttpClient;
   keyValueStore?: KeyValueStore;

@@ -14,10 +14,31 @@ import {
   isRetryableError,
 } from '@/backend/core';
 import type { HttpClient } from '@/backend/platform';
-import type { SearchFilter, SearchOptions, SearchResponse, InnertubeClientOptions } from './types';
+import type {
+  SearchFilter,
+  SearchOptions,
+  SearchResponse,
+  SearchSuggestionsResponse,
+  HomeFeedResponse,
+  AlbumDetailResponse,
+  ArtistDetailResponse,
+  PlaylistDetailResponse,
+  NextQueueResponse,
+  NextOptions,
+  ContinuationResponse,
+  EndpointOptions,
+  InnertubeClientOptions,
+} from './types';
 import { ContextBuilder } from './context/context-builder';
 import { VisitorDataManager } from './visitor/visitor-data-manager';
 import { parseSearchResponse } from './parsers/search-parser';
+import { parseSuggestionsResponse } from './parsers/suggestions-parser';
+import { parseHomeResponse } from './parsers/home-parser';
+import { parseAlbumResponse } from './parsers/album-parser';
+import { parseArtistResponse } from './parsers/artist-parser';
+import { parsePlaylistResponse } from './parsers/playlist-parser';
+import { parseNextResponse } from './parsers/next-parser';
+import { parseContinuationResponse } from './parsers/continuation-parser';
 
 // Publicly verified parameter tokens for YouTube Music category filtering
 const SEARCH_FILTER_PARAMS: Record<SearchFilter, string | undefined> = {
@@ -60,27 +81,15 @@ export class InnertubeClient {
     return this.visitorManager.setVisitorData(visitorData);
   }
 
-  async getRawSearch(
-    query: string,
-    options: SearchOptions = {},
+  private async postEndpoint(
+    endpointPath: string,
+    bodyParams: Record<string, unknown>,
+    options: EndpointOptions = {},
   ): Promise<Result<unknown, AppError>> {
     const visitorData = options.visitorData ?? (await this.visitorManager.getVisitorData());
-    const filter = options.filter ?? 'all';
-    const filterParam = SEARCH_FILTER_PARAMS[filter];
-
-    const bodyParams: Record<string, unknown> = { query };
-    if (filterParam) {
-      bodyParams.params = filterParam;
-    }
-    if (options.continuationToken) {
-      bodyParams.continuation = options.continuationToken;
-    }
-
     const body = this.contextBuilder.buildBody(bodyParams, visitorData);
     const headers = this.contextBuilder.buildHeaders(visitorData);
-    const url = `${this.config.baseUrl}/search`;
-
-    this.logger.debug(`Fetching search for query: "${query}"`, { filter });
+    const url = `${this.config.baseUrl}/${endpointPath}`;
 
     const fetchRes = await retryAsync(
       async () => {
@@ -116,6 +125,26 @@ export class InnertubeClient {
     return fetchRes.value.data ? { ok: true, value: fetchRes.value.data } : fetchRes;
   }
 
+  // 1. Search
+  async getRawSearch(
+    query: string,
+    options: SearchOptions = {},
+  ): Promise<Result<unknown, AppError>> {
+    const filter = options.filter ?? 'all';
+    const filterParam = SEARCH_FILTER_PARAMS[filter];
+
+    const bodyParams: Record<string, unknown> = { query };
+    if (filterParam) {
+      bodyParams.params = filterParam;
+    }
+    if (options.continuationToken) {
+      bodyParams.continuation = options.continuationToken;
+    }
+
+    this.logger.debug(`Fetching search for query: "${query}"`, { filter });
+    return this.postEndpoint('search', bodyParams, options);
+  }
+
   async search(
     query: string,
     options: SearchOptions = {},
@@ -127,5 +156,148 @@ export class InnertubeClient {
 
     const filter = options.filter ?? 'all';
     return parseSearchResponse(rawRes.value, query, filter);
+  }
+
+  // 2. Search Suggestions
+  async getRawSearchSuggestions(
+    query: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<unknown, AppError>> {
+    this.logger.debug(`Fetching suggestions for: "${query}"`);
+    return this.postEndpoint('music/get_search_suggestions', { input: query }, options);
+  }
+
+  async getSearchSuggestions(
+    query: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<SearchSuggestionsResponse, AppError>> {
+    const rawRes = await this.getRawSearchSuggestions(query, options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseSuggestionsResponse(rawRes.value, query);
+  }
+
+  // 3. Home Feed
+  async getRawHome(options: EndpointOptions = {}): Promise<Result<unknown, AppError>> {
+    this.logger.debug('Fetching Home browse feed');
+    return this.postEndpoint('browse', { browseId: 'FEmusic_home' }, options);
+  }
+
+  async getHome(options: EndpointOptions = {}): Promise<Result<HomeFeedResponse, AppError>> {
+    const rawRes = await this.getRawHome(options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseHomeResponse(rawRes.value);
+  }
+
+  // 4. Album
+  async getRawAlbum(
+    browseId: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<unknown, AppError>> {
+    this.logger.debug(`Fetching Album: "${browseId}"`);
+    return this.postEndpoint('browse', { browseId }, options);
+  }
+
+  async getAlbum(
+    browseId: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<AlbumDetailResponse, AppError>> {
+    const rawRes = await this.getRawAlbum(browseId, options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseAlbumResponse(rawRes.value, browseId);
+  }
+
+  // 5. Artist
+  async getRawArtist(
+    browseId: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<unknown, AppError>> {
+    this.logger.debug(`Fetching Artist: "${browseId}"`);
+    return this.postEndpoint('browse', { browseId }, options);
+  }
+
+  async getArtist(
+    browseId: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<ArtistDetailResponse, AppError>> {
+    const rawRes = await this.getRawArtist(browseId, options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseArtistResponse(rawRes.value, browseId);
+  }
+
+  // 6. Playlist
+  async getRawPlaylist(
+    playlistId: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<unknown, AppError>> {
+    const browseId = playlistId.startsWith('VL') ? playlistId : `VL${playlistId}`;
+    this.logger.debug(`Fetching Playlist: "${browseId}"`);
+    return this.postEndpoint('browse', { browseId }, options);
+  }
+
+  async getPlaylist(
+    playlistId: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<PlaylistDetailResponse, AppError>> {
+    const rawRes = await this.getRawPlaylist(playlistId, options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parsePlaylistResponse(rawRes.value, playlistId);
+  }
+
+  // 7. Next (Queue / Radio)
+  async getRawNext(
+    videoId: string,
+    options: NextOptions = {},
+  ): Promise<Result<unknown, AppError>> {
+    const bodyParams: Record<string, unknown> = { videoId };
+    if (options.playlistId) {
+      bodyParams.playlistId = options.playlistId;
+    }
+    if (options.continuationToken) {
+      bodyParams.continuation = options.continuationToken;
+    }
+
+    this.logger.debug(`Fetching Next for videoId: "${videoId}"`);
+    return this.postEndpoint('next', bodyParams, options);
+  }
+
+  async getNext(
+    videoId: string,
+    options: NextOptions = {},
+  ): Promise<Result<NextQueueResponse, AppError>> {
+    const rawRes = await this.getRawNext(videoId, options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseNextResponse(rawRes.value, videoId);
+  }
+
+  // 8. Continuation
+  async getRawContinuation(
+    continuationToken: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<unknown, AppError>> {
+    this.logger.debug('Fetching Continuation');
+    return this.postEndpoint('browse', { continuation: continuationToken }, options);
+  }
+
+  async getContinuation(
+    continuationToken: string,
+    options: EndpointOptions = {},
+  ): Promise<Result<ContinuationResponse, AppError>> {
+    const rawRes = await this.getRawContinuation(continuationToken, options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseContinuationResponse(rawRes.value);
   }
 }
