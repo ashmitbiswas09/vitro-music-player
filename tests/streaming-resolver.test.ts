@@ -99,8 +99,8 @@ describe('Streaming Module - Format Parsing & Ranking', () => {
     expect(result!.rawFormat.itag).toBe(140);
   });
 
-  it('handles player response with unplayable status', () => {
-    const raw = {
+  it('handles player response with distinct typed error reasons', () => {
+    const loginRaw = {
       playabilityStatus: {
         status: 'LOGIN_REQUIRED',
         reason: 'Sign in to confirm you’re not a bot',
@@ -108,12 +108,41 @@ describe('Streaming Module - Format Parsing & Ranking', () => {
       streamingData: {},
     };
 
-    const parsed = parsePlayerResponse(raw, { videoId: 'test1234', nowMs: 1000 });
-    expect(parsed.ok).toBe(false);
-    if (!parsed.ok) {
-      expect(parsed.error.code).toBe('STREAM_ERROR');
-      expect(parsed.error.reason).toBe('UNPLAYABLE');
-      expect(parsed.error.message).toContain('Sign in to confirm you’re not a bot');
+    const loginParsed = parsePlayerResponse(loginRaw, { videoId: 'test1234', nowMs: 1000 });
+    expect(loginParsed.ok).toBe(false);
+    if (!loginParsed.ok) {
+      expect(loginParsed.error.code).toBe('STREAM_ERROR');
+      expect(loginParsed.error.reason).toBe('LOGIN_REQUIRED');
+      expect(loginParsed.error.recoverableWithAuth).toBe(true);
+      expect(loginParsed.error.message).toContain('Sign in to confirm you’re not a bot');
+    }
+
+    const liveRaw = {
+      playabilityStatus: {
+        status: 'LIVE_STREAM_OFFLINE',
+        reason: 'This live stream has ended',
+      },
+      streamingData: {},
+    };
+    const liveParsed = parsePlayerResponse(liveRaw, { videoId: 'test-live', nowMs: 1000 });
+    expect(liveParsed.ok).toBe(false);
+    if (!liveParsed.ok) {
+      expect(liveParsed.error.reason).toBe('LIVE_STREAM');
+      expect(liveParsed.error.recoverableWithAuth).toBe(false);
+    }
+
+    const procRaw = {
+      playabilityStatus: {
+        status: 'UNPLAYABLE',
+        reason: "We're processing this video. Check back later.",
+      },
+      streamingData: {},
+    };
+    const procParsed = parsePlayerResponse(procRaw, { videoId: 'test-proc', nowMs: 1000 });
+    expect(procParsed.ok).toBe(false);
+    if (!procParsed.ok) {
+      expect(procParsed.error.reason).toBe('PROCESSING');
+      expect(procParsed.error.recoverableWithAuth).toBe(false);
     }
   });
 });

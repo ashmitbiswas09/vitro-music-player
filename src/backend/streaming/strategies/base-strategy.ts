@@ -123,9 +123,10 @@ export abstract class BaseInnertubeStreamStrategy implements StreamStrategy {
         new StreamError(
           `InnerTube player HTTP request failed: ${res.error.message}`,
           videoId,
-          is403 ? 'HTTP_403' : 'UNPLAYABLE',
+          is403 ? 'HTTP_403' : 'NETWORK',
           { statusCode, strategy: this.name },
           res.error,
+          false,
         ),
       );
     }

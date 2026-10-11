@@ -111,33 +111,42 @@ export class AuthError extends AppError {
   }
 }
 
+export type StreamErrorReason =
+  | 'UNPLAYABLE'
+  | 'DECIPHER_FAILED'
+  | 'EXPIRED'
+  | 'NO_FORMATS'
+  | 'HTTP_403'
+  | 'ALL_STRATEGIES_FAILED'
+  | 'LOGIN_REQUIRED'
+  | 'UNAVAILABLE'
+  | 'LIVE_STREAM'
+  | 'PROCESSING'
+  | 'NETWORK';
+
 export class StreamError extends AppError {
   readonly videoId: string;
-  readonly reason:
-    | 'UNPLAYABLE'
-    | 'DECIPHER_FAILED'
-    | 'EXPIRED'
-    | 'NO_FORMATS'
-    | 'HTTP_403'
-    | 'ALL_STRATEGIES_FAILED';
+  readonly reason: StreamErrorReason;
+  readonly recoverableWithAuth: boolean;
 
   constructor(
     message: string,
     videoId: string,
-    reason:
-      | 'UNPLAYABLE'
-      | 'DECIPHER_FAILED'
-      | 'EXPIRED'
-      | 'NO_FORMATS'
-      | 'HTTP_403'
-      | 'ALL_STRATEGIES_FAILED',
+    reason: StreamErrorReason,
     details?: AppErrorDetails,
     cause?: unknown,
+    recoverableWithAuth?: boolean,
   ) {
     super(message, 'STREAM_ERROR', details, cause);
     this.name = 'StreamError';
     this.videoId = videoId;
     this.reason = reason;
+    this.recoverableWithAuth =
+      recoverableWithAuth ??
+      (reason === 'LOGIN_REQUIRED' ||
+        details?.status === 'LOGIN_REQUIRED' ||
+        Boolean(details?.reason && String(details.reason).toLowerCase().includes('sign in')) ||
+        Boolean(details?.reason && String(details.reason).toLowerCase().includes('age')));
   }
 }
 

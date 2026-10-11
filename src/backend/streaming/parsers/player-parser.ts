@@ -9,6 +9,7 @@ import {
   type AudioStream,
   AudioStreamSchema,
   StreamError,
+  type StreamErrorReason,
   type Result,
   ok,
   err,
@@ -211,12 +212,53 @@ export function parsePlayerResponse(
   if (playabilityStatus) {
     const status = playabilityStatus.status.toUpperCase();
     if (status !== 'OK') {
-      const reason = playabilityStatus.reason ?? status;
+      const reasonText = playabilityStatus.reason ?? status;
+      const lowerReason = reasonText.toLowerCase();
+
+      let typedReason: StreamErrorReason = 'UNPLAYABLE';
+      let recoverableWithAuth = false;
+
+      if (
+        status === 'LOGIN_REQUIRED' ||
+        lowerReason.includes('sign in') ||
+        lowerReason.includes('confirm you’re not a bot') ||
+        lowerReason.includes("confirm you're not a bot") ||
+        lowerReason.includes('age')
+      ) {
+        typedReason = 'LOGIN_REQUIRED';
+        recoverableWithAuth = true;
+      } else if (
+        status === 'LIVE_STREAM_OFFLINE' ||
+        lowerReason.includes('live stream') ||
+        lowerReason.includes('streamed live')
+      ) {
+        typedReason = 'LIVE_STREAM';
+        recoverableWithAuth = false;
+      } else if (
+        lowerReason.includes('processing') ||
+        lowerReason.includes('check back later')
+      ) {
+        typedReason = 'PROCESSING';
+        recoverableWithAuth = false;
+      } else if (
+        status === 'ERROR' ||
+        lowerReason.includes('unavailable') ||
+        lowerReason.includes('removed') ||
+        lowerReason.includes('private')
+      ) {
+        typedReason = 'UNAVAILABLE';
+        recoverableWithAuth = lowerReason.includes('private') || lowerReason.includes('members');
+      }
+
       return err(
-        new StreamError(`Video is not playable (${status}): ${reason}`, videoId, 'UNPLAYABLE', {
-          status,
-          reason,
-        }),
+        new StreamError(
+          `Video is not playable (${status}): ${reasonText}`,
+          videoId,
+          typedReason,
+          { status, reason: reasonText },
+          undefined,
+          recoverableWithAuth,
+        ),
       );
     }
   }
