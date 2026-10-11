@@ -25,6 +25,8 @@ import type {
   ResolveOptions,
   StreamVerificationOptions,
   StreamVerificationResult,
+  FullVerificationOptions,
+  FullVerificationResult,
 } from './types';
 import { VisionOsStreamStrategy } from './strategies/visionos-strategy';
 import { AndroidVrStreamStrategy } from './strategies/android-vr-strategy';
@@ -159,14 +161,22 @@ export class DefaultStreamResolver implements StreamResolver {
     }
 
     try {
+      const headers: Record<string, string> = {
+        Range: 'bytes=0-1023',
+        Accept: '*/*',
+        ...(options.headers ?? {}),
+      };
+      if (options.userAgent && !headers['User-Agent']) {
+        headers['User-Agent'] = options.userAgent;
+      }
+      if (!headers['User-Agent']) {
+        headers['User-Agent'] =
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+      }
+
       const response = await fetch(streamUrl, {
         method: 'GET',
-        headers: {
-          Range: 'bytes=0-1023',
-          'User-Agent':
-            options.userAgent ??
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15',
-        },
+        headers,
         signal: controller.signal,
       });
 
@@ -215,11 +225,163 @@ export class DefaultStreamResolver implements StreamResolver {
     }
   }
 
+  async verifyFull(
+    resolved: ResolvedStream,
+    options: FullVerificationOptions = {},
+  ): Promise<FullVerificationResult> {
+    const durationSeconds = options.durationSeconds ?? 30;
+    const chunkSizeBytes = options.chunkSizeBytes ?? 64 * 1024;
+    const paceDelayMs = options.paceDelayMs ?? 50;
+    const timeoutMs = options.timeoutMs ?? 30000;
+
+    const stream = resolved.stream;
+    const bytesPerSec = stream.bitrate / 8;
+    let targetBytes = Math.ceil(bytesPerSec * durationSeconds);
+    if (stream.contentLength && stream.contentLength < targetBytes) {
+      targetBytes = stream.contentLength;
+    }
+
+    const startTime = performance.now();
+    let currentStart = 0;
+    let totalBytes = 0;
+    let chunkIndex = 0;
+    let throttledOr403 = false;
+    let lastStatusCode = 200;
+    let lastError: string | undefined;
+    const chunkDetails: FullVerificationResult['chunkDetails'] = [];
+
+    const headers: Record<string, string> = {
+      Accept: '*/*',
+      ...resolved.requestHeaders,
+    };
+
+    while (currentStart < targetBytes) {
+      const currentEnd = Math.min(currentStart + chunkSizeBytes - 1, targetBytes - 1);
+      const rangeHeader = `bytes=${currentStart}-${currentEnd}`;
+      const chunkStartTime = performance.now();
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      if (options.signal) {
+        options.signal.addEventListener('abort', () => controller.abort());
+      }
+
+      try {
+        const res = await fetch(stream.url, {
+          method: 'GET',
+          headers: {
+            ...headers,
+            Range: rangeHeader,
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        lastStatusCode = res.status;
+        const chunkLatencyMs = performance.now() - chunkStartTime;
+
+        if (res.status === 403 || res.status === 429) {
+          throttledOr403 = true;
+          lastError = `HTTP ${res.status} (${res.status === 429 ? 'Throttled / Rate Limited' : 'Forbidden / Expired'})`;
+          chunkDetails.push({
+            chunkIndex,
+            range: rangeHeader,
+            bytes: 0,
+            statusCode: res.status,
+            latencyMs: chunkLatencyMs,
+          });
+          break;
+        }
+
+        if (!res.ok && res.status !== 206) {
+          lastError = `HTTP ${res.status}: ${res.statusText}`;
+          chunkDetails.push({
+            chunkIndex,
+            range: rangeHeader,
+            bytes: 0,
+            statusCode: res.status,
+            latencyMs: chunkLatencyMs,
+          });
+          break;
+        }
+
+        const buf = await res.arrayBuffer();
+        const bytesReceived = buf.byteLength;
+        totalBytes += bytesReceived;
+
+        chunkDetails.push({
+          chunkIndex,
+          range: rangeHeader,
+          bytes: bytesReceived,
+          statusCode: res.status,
+          latencyMs: chunkLatencyMs,
+        });
+
+        if (bytesReceived === 0) {
+          lastError = 'Unexpected 0 bytes received in stream chunk';
+          break;
+        }
+
+        currentStart += bytesReceived;
+        chunkIndex++;
+
+        // Normal pace delay between sequential requests
+        if (currentStart < targetBytes && paceDelayMs > 0) {
+          await new Promise((r) => setTimeout(r, paceDelayMs));
+        }
+      } catch (caught: unknown) {
+        clearTimeout(timer);
+        const errMessage = caught instanceof Error ? caught.message : String(caught);
+        lastError = errMessage;
+        throttledOr403 = throttledOr403 || errMessage.includes('403') || errMessage.includes('429');
+        chunkDetails.push({
+          chunkIndex,
+          range: rangeHeader,
+          bytes: 0,
+          statusCode: 0,
+          latencyMs: performance.now() - chunkStartTime,
+        });
+        break;
+      }
+    }
+
+    const totalDurationMs = performance.now() - startTime;
+    const elapsedSec = totalDurationMs / 1000;
+    const averageThroughputBytesPerSec = elapsedSec > 0 ? totalBytes / elapsedSec : 0;
+    const throughputKbps = averageThroughputBytesPerSec / 1024;
+    const throughputMbps = (averageThroughputBytesPerSec * 8) / 1_000_000;
+
+    const isPlayable = !throttledOr403 && totalBytes > 0 && !lastError;
+
+    return {
+      isPlayable,
+      totalBytesReceived: totalBytes,
+      expectedBytes: targetBytes,
+      durationSeconds,
+      chunksCount: chunkIndex,
+      averageThroughputBytesPerSec,
+      throughputKbps,
+      throughputMbps,
+      totalDurationMs,
+      throttledOr403,
+      statusCode: lastStatusCode,
+      error: lastError,
+      chunkDetails,
+    };
+  }
+
   async resolveAndVerify(
     videoId: string,
-    options: ResolveOptions = {},
+    options: ResolveOptions & { verifyFull?: boolean } = {},
   ): Promise<
-    Result<{ resolved: ResolvedStream; verification: StreamVerificationResult }, StreamError>
+    Result<
+      {
+        resolved: ResolvedStream;
+        verification: StreamVerificationResult;
+        fullVerification?: FullVerificationResult;
+      },
+      StreamError
+    >
   > {
     const visitorData = options.visitorData ?? (await this.visitorDataManager?.getVisitorData());
     const resolveOpts: ResolveOptions = { ...options, visitorData };
@@ -238,23 +400,45 @@ export class DefaultStreamResolver implements StreamResolver {
 
       const verification = await this.verify(res.value.stream.url, {
         signal: options.signal,
+        headers: res.value.requestHeaders,
       });
 
-      if (verification.isPlayable) {
-        this.cache.set(videoId, res.value);
-        return ok({
-          resolved: res.value,
-          verification,
+      if (!verification.isPlayable) {
+        this.logger.warn(
+          `Verification failed for strategy "${strategy.name}" on video "${videoId}": HTTP ${verification.statusCode} (${verification.error})`,
+        );
+        this.cache.delete(videoId);
+        attempts.push({
+          strategy: strategy.name,
+          error: `Verification failed: HTTP ${verification.statusCode}`,
         });
+        continue;
       }
 
-      this.logger.warn(
-        `Verification failed for strategy "${strategy.name}" on video "${videoId}": HTTP ${verification.statusCode} (${verification.error})`,
-      );
-      this.cache.delete(videoId);
-      attempts.push({
-        strategy: strategy.name,
-        error: `Verification failed: HTTP ${verification.statusCode}`,
+      let fullVerification: FullVerificationResult | undefined;
+      if (options.verifyFull) {
+        fullVerification = await this.verifyFull(res.value, {
+          signal: options.signal,
+        });
+
+        if (!fullVerification.isPlayable) {
+          this.logger.warn(
+            `Full verification failed for strategy "${strategy.name}" on video "${videoId}": ${fullVerification.error}`,
+          );
+          this.cache.delete(videoId);
+          attempts.push({
+            strategy: strategy.name,
+            error: `Full verification failed: ${fullVerification.error ?? 'Unknown error'}`,
+          });
+          continue;
+        }
+      }
+
+      this.cache.set(videoId, res.value);
+      return ok({
+        resolved: res.value,
+        verification,
+        fullVerification,
       });
     }
 

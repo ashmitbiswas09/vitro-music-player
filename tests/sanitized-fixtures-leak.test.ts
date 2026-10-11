@@ -12,6 +12,16 @@ describe('Sanitized Fixtures Leak Scanner', () => {
     expect(files.length).toBeGreaterThan(0);
   });
 
+  it('cross-references raw visitor tokens from fixtures/recorded when present (skips when gitignored directory is missing)', (ctx) => {
+    if (!fs.existsSync(recordedDir) || fs.readdirSync(recordedDir).length === 0) {
+      ctx.skip(
+        'fixtures/recorded is missing or empty (gitignored; fresh clone). Skipping raw token cross-reference.',
+      );
+      return;
+    }
+    expect(knownVisitorTokens.size).toBeGreaterThan(0);
+  });
+
   // Extract all known visitorData tokens from raw recordings to ensure none leaked
   const knownVisitorTokens = new Set<string>();
   if (fs.existsSync(recordedDir)) {

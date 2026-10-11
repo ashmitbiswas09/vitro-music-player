@@ -142,6 +142,10 @@ describe('DefaultStreamResolver - Strategy Fallback & Caching', () => {
             expiresAt: 2000000,
           },
           strategyName: 'strategy-success',
+          requestHeaders: {
+            'User-Agent': 'test-ua',
+            Accept: '*/*',
+          },
         }),
       ),
     };
@@ -213,6 +217,10 @@ describe('DefaultStreamResolver - Strategy Fallback & Caching', () => {
             expiresAt: clock.now() + 120_000, // Valid for 2 minutes
           },
           strategyName: 'strat',
+          requestHeaders: {
+            'User-Agent': 'test-ua',
+            Accept: '*/*',
+          },
         });
       }),
     };
@@ -263,3 +271,137 @@ describe('Sanitized Fixtures Verification', () => {
     }
   });
 });
+
+describe('StreamResolver - verifyFull and RequestHeaders', () => {
+  it('includes requestHeaders (User-Agent, Accept) on resolved streams', async () => {
+    const mockHttp = new MemoryHttpClient();
+    // Mock player endpoint returning single format
+    mockHttp.whenPost('https://www.youtube.com/youtubei/v1/player', {
+      streamingData: {
+        adaptiveFormats: [
+          {
+            itag: 251,
+            url: 'https://googlevideo.com/videoplayback?expire=1800000000&itag=251',
+            mimeType: 'audio/webm; codecs="opus"',
+            bitrate: 150000,
+            contentLength: '1000000',
+          },
+        ],
+      },
+    });
+
+    const resolver = new DefaultStreamResolver({
+      httpClient: mockHttp,
+      minRequestDelayMs: 0,
+    });
+
+    const res = await resolver.resolve('test-headers');
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.requestHeaders).toBeDefined();
+      expect(res.value.requestHeaders['User-Agent']).toContain('Safari');
+      expect(res.value.requestHeaders['Accept']).toBe('*/*');
+    }
+  });
+
+  it('verifyFull calculates sequential ranged requests, throughput, and detects 403', async () => {
+    const resolver = new DefaultStreamResolver({
+      httpClient: new MemoryHttpClient(),
+    });
+
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    const requestedRanges: string[] = [];
+
+    // Mock fetch simulating 3 successful chunks
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      callCount++;
+      const range = (init?.headers as Record<string, string>)?.['Range'] ?? '';
+      requestedRanges.push(range);
+
+      const fakeChunk = new Uint8Array(1024); // 1KB per chunk
+      return new Response(fakeChunk, {
+        status: 206,
+        headers: {
+          'Content-Type': 'audio/webm',
+          'Content-Range': `bytes 0-1023/1000000`,
+        },
+      });
+    });
+
+    try {
+      const mockResolved = {
+        stream: {
+          url: 'https://googlevideo.com/test-stream',
+          mimeType: 'audio/webm; codecs="opus"',
+          codec: 'opus' as const,
+          bitrate: 10000, // 10,000 bps -> 1,250 bytes/sec
+          contentLength: 3000,
+          expiresAt: Date.now() + 100000,
+        },
+        strategyName: 'visionos',
+        requestHeaders: { 'User-Agent': 'TestUA/1.0', Accept: '*/*' },
+      };
+
+      const result = await resolver.verifyFull(mockResolved, {
+        durationSeconds: 2, // 2s -> 2,500 bytes target
+        chunkSizeBytes: 1024,
+        paceDelayMs: 0,
+      });
+
+      expect(result.isPlayable).toBe(true);
+      expect(result.throttledOr403).toBe(false);
+      expect(result.totalBytesReceived).toBeGreaterThanOrEqual(2000);
+      expect(result.chunksCount).toBeGreaterThanOrEqual(2);
+      expect(callCount).toBeGreaterThanOrEqual(2);
+      expect(result.throughputKbps).toBeGreaterThan(0);
+      expect(result.averageThroughputBytesPerSec).toBeGreaterThan(0);
+      expect(requestedRanges[0]).toBe('bytes=0-1023');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('verifyFull detects HTTP 403/429 throttling and marks stream as unplayable', async () => {
+    const resolver = new DefaultStreamResolver({
+      httpClient: new MemoryHttpClient(),
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response('Forbidden', {
+        status: 403,
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    });
+
+    try {
+      const mockResolved = {
+        stream: {
+          url: 'https://googlevideo.com/forbidden-stream',
+          mimeType: 'audio/webm; codecs="opus"',
+          codec: 'opus' as const,
+          bitrate: 150000,
+          contentLength: 4000000,
+          expiresAt: Date.now() + 100000,
+        },
+        strategyName: 'visionos',
+        requestHeaders: { 'User-Agent': 'TestUA/1.0', Accept: '*/*' },
+      };
+
+      const result = await resolver.verifyFull(mockResolved, {
+        durationSeconds: 5,
+        chunkSizeBytes: 1024,
+        paceDelayMs: 0,
+      });
+
+      expect(result.isPlayable).toBe(false);
+      expect(result.throttledOr403).toBe(true);
+      expect(result.statusCode).toBe(403);
+      expect(result.error).toContain('403');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+

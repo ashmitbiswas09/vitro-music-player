@@ -146,6 +146,10 @@ export abstract class BaseInnertubeStreamStrategy implements StreamStrategy {
       strategyName: this.name,
       videoDetails: parsed.value.videoDetails,
       rawFormat: parsed.value.rawFormat,
+      requestHeaders: {
+        'User-Agent': this.userAgent,
+        Accept: '*/*',
+      },
     });
   }
 }

@@ -13,6 +13,8 @@ export type {
   ResolveOptions,
   StreamVerificationOptions,
   StreamVerificationResult,
+  FullVerificationOptions,
+  FullVerificationResult,
 } from './types';
 
 export { DefaultStreamResolver } from './resolver';

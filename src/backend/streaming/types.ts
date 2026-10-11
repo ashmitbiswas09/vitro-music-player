@@ -17,6 +17,7 @@ export interface StreamVerificationOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   userAgent?: string;
+  headers?: Record<string, string>;
 }
 
 export interface StreamVerificationResult {
@@ -29,6 +30,36 @@ export interface StreamVerificationResult {
   error?: string;
 }
 
+export interface FullVerificationOptions {
+  signal?: AbortSignal;
+  durationSeconds?: number;
+  chunkSizeBytes?: number;
+  paceDelayMs?: number;
+  timeoutMs?: number;
+}
+
+export interface FullVerificationResult {
+  isPlayable: boolean;
+  totalBytesReceived: number;
+  expectedBytes: number;
+  durationSeconds: number;
+  chunksCount: number;
+  averageThroughputBytesPerSec: number;
+  throughputKbps: number;
+  throughputMbps: number;
+  totalDurationMs: number;
+  throttledOr403: boolean;
+  statusCode?: number;
+  error?: string;
+  chunkDetails?: {
+    chunkIndex: number;
+    range: string;
+    bytes: number;
+    statusCode: number;
+    latencyMs: number;
+  }[];
+}
+
 export interface ResolvedStream {
   stream: AudioStream;
   strategyName: string;
@@ -39,6 +70,7 @@ export interface ResolvedStream {
     lengthSeconds?: number;
   };
   rawFormat?: unknown;
+  requestHeaders: Record<string, string>;
 }
 
 export interface StreamStrategy {
@@ -59,10 +91,21 @@ export interface StreamResolverOptions {
 export interface StreamResolver {
   resolve(videoId: string, options?: ResolveOptions): Promise<Result<ResolvedStream, StreamError>>;
   verify(streamUrl: string, options?: StreamVerificationOptions): Promise<StreamVerificationResult>;
+  verifyFull(
+    resolved: ResolvedStream,
+    options?: FullVerificationOptions,
+  ): Promise<FullVerificationResult>;
   resolveAndVerify(
     videoId: string,
-    options?: ResolveOptions,
+    options?: ResolveOptions & { verifyFull?: boolean },
   ): Promise<
-    Result<{ resolved: ResolvedStream; verification: StreamVerificationResult }, StreamError>
+    Result<
+      {
+        resolved: ResolvedStream;
+        verification: StreamVerificationResult;
+        fullVerification?: FullVerificationResult;
+      },
+      StreamError
+    >
   >;
 }
