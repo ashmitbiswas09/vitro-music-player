@@ -46,20 +46,35 @@ Commands:
   resolve <videoId> [--verify] [--verify-full] [--record]
                       Resolve best audio stream URL and format (highest bitrate Opus/AAC).
                       Pass --verify to make a small ranged request (bytes 0-1023) to verify playability.
-                      Pass --verify-full to stream the first 30 seconds of audio in sequential ranged requests at normal pace, reporting total bytes, throughput, and 403/throttling.
+                      Pass --verify-full to stream the first 30 seconds of audio in sequential ranged requests at normal pace.
                       Pass --record to save real response fixture to fixtures/recorded and fixtures/sanitized.
-  health              Run health check on ~20 diverse videos across strategies and print success table.
-  home                Fetch personalized or browse home feed (connected in Phase 2 browse)
+  home [--record]     Fetch personalized or guest browse home feed with shelves.
+  album <id> [--record]
+                      Fetch album tracklist and metadata by browseId (e.g. MPREb_...).
+  artist <id> [--record]
+                      Fetch artist profile, top songs, albums, and bio by browseId (e.g. UCr_...).
+  playlist <id> [--record]
+                      Fetch playlist metadata and tracklist by playlistId (e.g. VLPL... or PL...).
+  next <videoId> [--playlist <playlistId>] [--record]
+                      Fetch Up Next queue / radio tracks for a video.
+  suggest <text> [--record]
+                      Fetch search suggestions for query prefix.
+  health [--mode search|fixed] [--fixed]
+                      Run stream resolution health check. Default runs ~15 diverse search queries,
+                      resolves top track of each, and reports success. Pass --fixed for the 20-video list.
   help, --help, -h    Show this help menu
 
 Examples:
   npm run cli -- search "Radiohead Creep"
-  npm run cli -- search "Radiohead" --filter songs --record
-  npm run cli -- resolve "dQw4w9WgXcQ" --verify
   npm run cli -- resolve "9RfVp-GhKfs" --verify-full
-  npm run cli -- resolve "9RfVp-GhKfs" --verify --record
-  npm run cli -- health
   npm run cli -- home
+  npm run cli -- album "MPREb_yXhSI4FCUo6"
+  npm run cli -- artist "UCr_iyUANcn9OX_yy9piYoLw"
+  npm run cli -- playlist "PL4fGSI1pDJn6O1LS0XSdF3RyO0Rq_LDeI"
+  npm run cli -- next "9RfVp-GhKfs"
+  npm run cli -- suggest "radiohead"
+  npm run cli -- health
+  npm run cli -- health --fixed
 `);
 }
 
@@ -72,6 +87,26 @@ function sanitizeFixtureData(data: unknown): unknown {
     }
   }
   return sanitized;
+}
+
+function recordFixture(prefix: string, idOrName: string, data: unknown): void {
+  const fixturesDir = path.resolve(__dirname, '../fixtures');
+  const recordedDir = path.join(fixturesDir, 'recorded');
+  const sanitizedDir = path.join(fixturesDir, 'sanitized');
+
+  fs.mkdirSync(recordedDir, { recursive: true });
+  fs.mkdirSync(sanitizedDir, { recursive: true });
+
+  const cleanName = idOrName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+  const recordedPath = path.join(recordedDir, `${prefix}_${cleanName}.json`);
+  const sanitizedPath = path.join(sanitizedDir, `${prefix}_${cleanName}.json`);
+
+  fs.writeFileSync(recordedPath, JSON.stringify(data, null, 2), 'utf-8');
+  const sanitizedData = sanitizeFixtureData(data);
+  fs.writeFileSync(sanitizedPath, JSON.stringify(sanitizedData, null, 2), 'utf-8');
+
+  console.log(`\n[Record] Raw response saved to: ${path.relative(process.cwd(), recordedPath)}`);
+  console.log(`[Record] Sanitized fixture saved to: ${path.relative(process.cwd(), sanitizedPath)}`);
 }
 
 async function handleSearch(
@@ -398,14 +433,475 @@ async function handleResolve(
   };
 }
 
-async function handleHome(): Promise<void> {
+async function handleHome(shouldRecord: boolean): Promise<CliTiming> {
   const homeStart = performance.now();
   console.log('[CLI] Fetching Home feed...');
-  console.log('[CLI] Status: NOT IMPLEMENTED YET (scheduled for Phase 2 - Innertube Browse).');
-  console.log('[CLI] Result: No fake data returned.');
-  const homeLatencyMs = performance.now() - homeStart;
 
-  console.log(`[Perf] Home Feed Latency: ${homeLatencyMs.toFixed(2)} ms`);
+  const httpClient = new FetchHttpClient();
+  const client = new InnertubeClient({ httpClient });
+
+  const rawRes = await client.getRawHome();
+  const fetchLatencyMs = performance.now() - homeStart;
+
+  if (!rawRes.ok) {
+    console.error(`[CLI Error] Fetching Home feed failed: ${rawRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - homeStart,
+    };
+  }
+
+  if (shouldRecord) {
+    recordFixture('home', 'feed', rawRes.value);
+  }
+
+  const parsedRes = await client.getHome();
+  if (!parsedRes.ok) {
+    console.error(`[CLI Error] Parser error: ${parsedRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - homeStart,
+    };
+  }
+
+  const { sections, continuationToken, parseDurationMs, responseSizeBytes } = parsedRes.value;
+
+  console.log(`\n========================================`);
+  console.log(`Home Feed (${sections.length} sections / shelves):`);
+  console.log(`========================================`);
+  sections.forEach((section, idx) => {
+    console.log(`\n  ${idx + 1}. [Shelf] "${section.title}" (${section.items.length} items)`);
+    section.items.slice(0, 3).forEach((item) => {
+      switch (item.type) {
+        case 'track': {
+          const artists = item.track.artists.map((a) => a.name).join(', ') || 'Unknown Artist';
+          console.log(`      - [Track] ${item.track.title} - ${artists} [id: ${item.track.id}]`);
+          break;
+        }
+        case 'album': {
+          const artists = item.album.artists.map((a) => a.name).join(', ') || '';
+          console.log(
+            `      - [Album] ${item.album.title}${artists ? ` by ${artists}` : ''} [id: ${item.album.id}]`,
+          );
+          break;
+        }
+        case 'artist':
+          console.log(`      - [Artist] ${item.artist.name} [id: ${item.artist.id}]`);
+          break;
+        case 'playlist':
+          console.log(`      - [Playlist] ${item.playlist.title} [id: ${item.playlist.id}]`);
+          break;
+      }
+    });
+    if (section.items.length > 3) {
+      console.log(`      ... and ${section.items.length - 3} more items`);
+    }
+  });
+
+  if (continuationToken) {
+    console.log(`\n  Continuation Token: ${continuationToken.slice(0, 32)}...`);
+  }
+
+  return {
+    coldStartTimeMs: 0,
+    commandExecutionMs: fetchLatencyMs,
+    parseTimeMs: parseDurationMs,
+    responseSizeBytes,
+    totalTimeMs: performance.now() - homeStart,
+  };
+}
+
+async function handleAlbum(
+  browseId: string | undefined,
+  shouldRecord: boolean,
+): Promise<CliTiming> {
+  if (!browseId) {
+    console.error('Error: browseId is required. Usage: npm run cli -- album <browseId> [--record]');
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: 0,
+    };
+  }
+
+  const albumStart = performance.now();
+  console.log(`[CLI] Fetching Album: "${browseId}"...`);
+
+  const httpClient = new FetchHttpClient();
+  const client = new InnertubeClient({ httpClient });
+
+  const rawRes = await client.getRawAlbum(browseId);
+  const fetchLatencyMs = performance.now() - albumStart;
+
+  if (!rawRes.ok) {
+    console.error(`[CLI Error] Album fetch failed: ${rawRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - albumStart,
+    };
+  }
+
+  if (shouldRecord) {
+    recordFixture('album', browseId, rawRes.value);
+  }
+
+  const parsedRes = await client.getAlbum(browseId);
+  if (!parsedRes.ok) {
+    console.error(`[CLI Error] Parser error: ${parsedRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - albumStart,
+    };
+  }
+
+  const { album, parseDurationMs, responseSizeBytes } = parsedRes.value;
+  const artists = album.artists.map((a) => a.name).join(', ') || 'Unknown Artist';
+  const tracks = album.tracks || [];
+
+  console.log(`\n========================================`);
+  console.log(`Album: ${album.title}`);
+  console.log(`========================================`);
+  console.log(`  Artist:         ${artists}`);
+  if (album.year) {
+    console.log(`  Release Year:   ${album.year}`);
+  }
+  console.log(`  Track Count:    ${album.trackCount ?? tracks.length}`);
+  if (album.durationSeconds) {
+    console.log(
+      `  Duration:       ${Math.floor(album.durationSeconds / 60)}m ${album.durationSeconds % 60}s`,
+    );
+  }
+  console.log(`\nTracklist (${tracks.length} tracks):`);
+  tracks.slice(0, 15).forEach((track, idx) => {
+    const dur = track.durationSeconds
+      ? ` (${Math.floor(track.durationSeconds / 60)}:${String(track.durationSeconds % 60).padStart(2, '0')})`
+      : '';
+    console.log(`  ${String(idx + 1).padStart(2, ' ')}. ${track.title}${dur} [id: ${track.id}]`);
+  });
+  if (tracks.length > 15) {
+    console.log(`  ... and ${tracks.length - 15} more tracks`);
+  }
+
+  return {
+    coldStartTimeMs: 0,
+    commandExecutionMs: fetchLatencyMs,
+    parseTimeMs: parseDurationMs,
+    responseSizeBytes,
+    totalTimeMs: performance.now() - albumStart,
+  };
+}
+
+async function handleArtist(
+  browseId: string | undefined,
+  shouldRecord: boolean,
+): Promise<CliTiming> {
+  if (!browseId) {
+    console.error('Error: browseId is required. Usage: npm run cli -- artist <browseId> [--record]');
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: 0,
+    };
+  }
+
+  const artistStart = performance.now();
+  console.log(`[CLI] Fetching Artist: "${browseId}"...`);
+
+  const httpClient = new FetchHttpClient();
+  const client = new InnertubeClient({ httpClient });
+
+  const rawRes = await client.getRawArtist(browseId);
+  const fetchLatencyMs = performance.now() - artistStart;
+
+  if (!rawRes.ok) {
+    console.error(`[CLI Error] Artist fetch failed: ${rawRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - artistStart,
+    };
+  }
+
+  if (shouldRecord) {
+    recordFixture('artist', browseId, rawRes.value);
+  }
+
+  const parsedRes = await client.getArtist(browseId);
+  if (!parsedRes.ok) {
+    console.error(`[CLI Error] Parser error: ${parsedRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - artistStart,
+    };
+  }
+
+  const { artist, albums, singles, parseDurationMs, responseSizeBytes } = parsedRes.value;
+
+  console.log(`\n========================================`);
+  console.log(`Artist: ${artist.name}`);
+  console.log(`========================================`);
+  if (artist.description) {
+    console.log(`  Bio: ${artist.description.slice(0, 180)}...`);
+  }
+  const topTracks = artist.topTracks || [];
+  if (topTracks.length > 0) {
+    console.log(`\nTop Songs (${topTracks.length}):`);
+    topTracks.slice(0, 5).forEach((t, idx) => {
+      console.log(`  ${idx + 1}. ${t.title} [id: ${t.id}]`);
+    });
+  }
+  if (albums.length > 0) {
+    console.log(`\nAlbums (${albums.length}):`);
+    albums.slice(0, 5).forEach((alb, idx) => {
+      console.log(`  ${idx + 1}. ${alb.title}${alb.year ? ` (${alb.year})` : ''} [id: ${alb.id}]`);
+    });
+  }
+  if (singles.length > 0) {
+    console.log(`\nSingles & EPs (${singles.length}):`);
+    singles.slice(0, 5).forEach((s, idx) => {
+      console.log(`  ${idx + 1}. ${s.title}${s.year ? ` (${s.year})` : ''} [id: ${s.id}]`);
+    });
+  }
+
+  return {
+    coldStartTimeMs: 0,
+    commandExecutionMs: fetchLatencyMs,
+    parseTimeMs: parseDurationMs,
+    responseSizeBytes,
+    totalTimeMs: performance.now() - artistStart,
+  };
+}
+
+async function handlePlaylist(
+  playlistId: string | undefined,
+  shouldRecord: boolean,
+): Promise<CliTiming> {
+  if (!playlistId) {
+    console.error(
+      'Error: playlistId is required. Usage: npm run cli -- playlist <playlistId> [--record]',
+    );
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: 0,
+    };
+  }
+
+  const playlistStart = performance.now();
+  console.log(`[CLI] Fetching Playlist: "${playlistId}"...`);
+
+  const httpClient = new FetchHttpClient();
+  const client = new InnertubeClient({ httpClient });
+
+  const rawRes = await client.getRawPlaylist(playlistId);
+  const fetchLatencyMs = performance.now() - playlistStart;
+
+  if (!rawRes.ok) {
+    console.error(`[CLI Error] Playlist fetch failed: ${rawRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - playlistStart,
+    };
+  }
+
+  if (shouldRecord) {
+    recordFixture('playlist', playlistId, rawRes.value);
+  }
+
+  const parsedRes = await client.getPlaylist(playlistId);
+  if (!parsedRes.ok) {
+    console.error(`[CLI Error] Parser error: ${parsedRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - playlistStart,
+    };
+  }
+
+  const { playlist, parseDurationMs, responseSizeBytes } = parsedRes.value;
+  const tracks = playlist.tracks || [];
+
+  console.log(`\n========================================`);
+  console.log(`Playlist: ${playlist.title}`);
+  console.log(`========================================`);
+  if (playlist.author) {
+    console.log(`  Author:       ${playlist.author}`);
+  }
+  console.log(`  Tracks:       ${playlist.trackCount ?? tracks.length}`);
+  if (playlist.continuationToken) {
+    console.log(`  Has More:     Yes (continuation token present)`);
+  }
+  console.log(`\nTracklist:`);
+  tracks.slice(0, 15).forEach((t, idx) => {
+    const artists = t.artists.map((a) => a.name).join(', ') || 'Unknown Artist';
+    const dur = t.durationSeconds
+      ? ` (${Math.floor(t.durationSeconds / 60)}:${String(t.durationSeconds % 60).padStart(2, '0')})`
+      : '';
+    console.log(`  ${String(idx + 1).padStart(2, ' ')}. ${t.title} - ${artists}${dur} [id: ${t.id}]`);
+  });
+  if (tracks.length > 15) {
+    console.log(`  ... and ${tracks.length - 15} more tracks`);
+  }
+
+  return {
+    coldStartTimeMs: 0,
+    commandExecutionMs: fetchLatencyMs,
+    parseTimeMs: parseDurationMs,
+    responseSizeBytes,
+    totalTimeMs: performance.now() - playlistStart,
+  };
+}
+
+async function handleNext(
+  videoId: string | undefined,
+  playlistId: string | undefined,
+  shouldRecord: boolean,
+): Promise<CliTiming> {
+  if (!videoId) {
+    console.error(
+      'Error: videoId is required. Usage: npm run cli -- next <videoId> [--playlist <playlistId>] [--record]',
+    );
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: 0,
+    };
+  }
+
+  const nextStart = performance.now();
+  console.log(
+    `[CLI] Fetching Next queue / radio for videoId: "${videoId}"${playlistId ? ` (playlist: ${playlistId})` : ''}...`,
+  );
+
+  const httpClient = new FetchHttpClient();
+  const client = new InnertubeClient({ httpClient });
+
+  const rawRes = await client.getRawNext(videoId, { playlistId });
+  const fetchLatencyMs = performance.now() - nextStart;
+
+  if (!rawRes.ok) {
+    console.error(`[CLI Error] Next fetch failed: ${rawRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - nextStart,
+    };
+  }
+
+  if (shouldRecord) {
+    recordFixture('next', videoId, rawRes.value);
+  }
+
+  const parsedRes = await client.getNext(videoId, { playlistId });
+  if (!parsedRes.ok) {
+    console.error(`[CLI Error] Parser error: ${parsedRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - nextStart,
+    };
+  }
+
+  const { currentTrack, queue, parseDurationMs, responseSizeBytes, continuationToken } =
+    parsedRes.value;
+
+  console.log(`\n========================================`);
+  console.log(`Up Next / Radio Queue:`);
+  console.log(`========================================`);
+  if (currentTrack) {
+    const curArtists = currentTrack.artists.map((a) => a.name).join(', ') || 'Unknown Artist';
+    console.log(`  Now Playing:  ${currentTrack.title} - ${curArtists} [id: ${currentTrack.id}]`);
+  }
+  console.log(`  Queue Tracks: ${queue.length}`);
+  if (continuationToken) {
+    console.log(`  Has More:     Yes (continuation token available)`);
+  }
+  console.log(`\nUpcoming Queue:`);
+  queue.slice(0, 15).forEach((t, idx) => {
+    const artists = t.artists.map((a) => a.name).join(', ') || 'Unknown Artist';
+    const dur = t.durationSeconds
+      ? ` (${Math.floor(t.durationSeconds / 60)}:${String(t.durationSeconds % 60).padStart(2, '0')})`
+      : '';
+    console.log(`  ${String(idx + 1).padStart(2, ' ')}. ${t.title} - ${artists}${dur} [id: ${t.id}]`);
+  });
+  if (queue.length > 15) {
+    console.log(`  ... and ${queue.length - 15} more tracks`);
+  }
+
+  return {
+    coldStartTimeMs: 0,
+    commandExecutionMs: fetchLatencyMs,
+    parseTimeMs: parseDurationMs,
+    responseSizeBytes,
+    totalTimeMs: performance.now() - nextStart,
+  };
+}
+
+async function handleSuggest(
+  text: string | undefined,
+  shouldRecord: boolean,
+): Promise<CliTiming> {
+  if (!text || !text.trim()) {
+    console.error('Error: query text is required. Usage: npm run cli -- suggest <text> [--record]');
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: 0,
+    };
+  }
+
+  const suggestStart = performance.now();
+  console.log(`[CLI] Fetching search suggestions for: "${text}"...`);
+
+  const httpClient = new FetchHttpClient();
+  const client = new InnertubeClient({ httpClient });
+
+  const rawRes = await client.getRawSearchSuggestions(text);
+  const fetchLatencyMs = performance.now() - suggestStart;
+
+  if (!rawRes.ok) {
+    console.error(`[CLI Error] Search suggestions fetch failed: ${rawRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - suggestStart,
+    };
+  }
+
+  if (shouldRecord) {
+    recordFixture('suggest', text, rawRes.value);
+  }
+
+  const parsedRes = await client.getSearchSuggestions(text);
+  if (!parsedRes.ok) {
+    console.error(`[CLI Error] Parser error: ${parsedRes.error.message}`);
+    process.exitCode = 1;
+    return {
+      coldStartTimeMs: 0,
+      totalTimeMs: performance.now() - suggestStart,
+    };
+  }
+
+  const { suggestions, parseDurationMs, responseSizeBytes } = parsedRes.value;
+
+  console.log(`\nSuggestions for "${text}" (${suggestions.length} items):`);
+  suggestions.forEach((s, idx) => {
+    console.log(`  ${idx + 1}. ${s}`);
+  });
+
+  return {
+    coldStartTimeMs: 0,
+    commandExecutionMs: fetchLatencyMs,
+    parseTimeMs: parseDurationMs,
+    responseSizeBytes,
+    totalTimeMs: performance.now() - suggestStart,
+  };
 }
 
 interface HealthTarget {
@@ -450,9 +946,31 @@ const HEALTH_TARGETS: HealthTarget[] = [
   { id: 'CevxZvSJLk8', category: 'Recent / High-Traffic', title: 'Katy Perry - Roar' },
 ];
 
-async function handleHealth(): Promise<CliTiming> {
+interface HealthSearchQuery {
+  genre: string;
+  query: string;
+}
+
+const HEALTH_SEARCH_QUERIES: HealthSearchQuery[] = [
+  { genre: 'Alt Rock', query: 'Radiohead Creep' },
+  { genre: 'Modern Pop', query: 'Taylor Swift Anti-Hero' },
+  { genre: 'Classic Rock', query: 'Queen Bohemian Rhapsody' },
+  { genre: '80s Pop', query: 'Michael Jackson Billie Jean' },
+  { genre: 'Jazz', query: 'Miles Davis So What' },
+  { genre: 'Classical', query: 'Beethoven Moonlight Sonata' },
+  { genre: 'Hip-Hop', query: 'Kendrick Lamar HUMBLE' },
+  { genre: 'Electronic', query: 'Daft Punk Get Lucky' },
+  { genre: 'Reggae', query: 'Bob Marley Three Little Birds' },
+  { genre: 'Latin Pop', query: 'Luis Fonsi Despacito' },
+  { genre: 'K-Pop', query: 'BTS Dynamite' },
+  { genre: 'Bollywood', query: 'Arijit Singh Kesariya' },
+  { genre: 'French Pop', query: 'Indila Derniere Danse' },
+  { genre: 'Afrobeats', query: 'Wizkid Essence' },
+  { genre: 'J-Pop', query: 'YOASOBI Idol' },
+];
+
+async function handleHealth(mode: 'search' | 'fixed'): Promise<CliTiming> {
   const healthStart = performance.now();
-  console.log('[CLI] Running stream health check on 20 diverse videos across strategies...\n');
 
   const httpClient = new FetchHttpClient();
   const visitorDataManager = new VisitorDataManager({
@@ -472,14 +990,6 @@ async function handleHealth(): Promise<CliTiming> {
     latencyMs: number;
   }
 
-  interface RowResult {
-    target: HealthTarget;
-    visionos: StrategyResult;
-    androidVr: StrategyResult;
-    fallbackPlayable: boolean;
-  }
-
-  const results: RowResult[] = [];
   const delayMs = 350; // Respect minimum delay between requests
 
   async function testStrategy(
@@ -523,6 +1033,161 @@ async function handleHealth(): Promise<CliTiming> {
       };
     }
   }
+
+  if (mode === 'search') {
+    console.log(
+      `[CLI] Running stream health check on ~15 diverse search queries (mode: search)...\n`,
+    );
+
+    const client = new InnertubeClient({ httpClient, visitorDataOverride: visitorData });
+
+    interface SearchRowResult {
+      genre: string;
+      query: string;
+      topSongTitle: string;
+      videoId: string;
+      visionos: StrategyResult;
+      androidVr: StrategyResult;
+      fallbackPlayable: boolean;
+    }
+
+    const searchResults: SearchRowResult[] = [];
+
+    for (let i = 0; i < HEALTH_SEARCH_QUERIES.length; i++) {
+      const item = HEALTH_SEARCH_QUERIES[i];
+      process.stdout.write(
+        `[${String(i + 1).padStart(2, ' ')}/${HEALTH_SEARCH_QUERIES.length}] Searching "${item.query}"...\r`,
+      );
+
+      const searchRes = await client.search(item.query, { filter: 'songs' });
+      await new Promise((r) => setTimeout(r, delayMs));
+
+      let topTrack: { id: string; title: string } | undefined;
+      if (searchRes.ok) {
+        const trackItem = searchRes.value.items.find((it) => it.type === 'track');
+        if (trackItem && trackItem.type === 'track') {
+          topTrack = { id: trackItem.track.id, title: trackItem.track.title };
+        }
+      }
+
+      if (!topTrack) {
+        searchResults.push({
+          genre: item.genre,
+          query: item.query,
+          topSongTitle: 'Not Found',
+          videoId: 'N/A',
+          visionos: { success: false, statusText: 'FAIL (No Track)', latencyMs: 0 },
+          androidVr: { success: false, statusText: 'FAIL (No Track)', latencyMs: 0 },
+          fallbackPlayable: false,
+        });
+        continue;
+      }
+
+      process.stdout.write(
+        `[${String(i + 1).padStart(2, ' ')}/${HEALTH_SEARCH_QUERIES.length}] Resolving "${topTrack.title.slice(0, 25)}" (${topTrack.id})...\r`,
+      );
+
+      const vRes = await testStrategy(visionOsStrategy, topTrack.id);
+      await new Promise((r) => setTimeout(r, delayMs));
+
+      const aRes = await testStrategy(androidVrStrategy, topTrack.id);
+      await new Promise((r) => setTimeout(r, delayMs));
+
+      const fallbackPlayable = vRes.success || aRes.success;
+
+      searchResults.push({
+        genre: item.genre,
+        query: item.query,
+        topSongTitle: topTrack.title,
+        videoId: topTrack.id,
+        visionos: vRes,
+        androidVr: aRes,
+        fallbackPlayable,
+      });
+    }
+
+    // Clear progress line
+    process.stdout.write(' '.repeat(80) + '\r');
+
+    console.log(
+      '========================================================================================================================',
+    );
+    console.log(
+      '                           STREAM RESOLUTION HEALTH CHECK (~15 DIVERSE SEARCH QUERIES)                                  ',
+    );
+    console.log(
+      '========================================================================================================================',
+    );
+    console.log(
+      ` ${'#'.padEnd(3)} | ${'Genre'.padEnd(14)} | ${'Search Query'.padEnd(28)} | ${'Top Song (Video ID)'.padEnd(32)} | ${'VisionOS'.padEnd(22)} | ${'Android VR'.padEnd(22)}`,
+    );
+    console.log(
+      '-----+----------------+------------------------------+----------------------------------+------------------------+-----------------------',
+    );
+
+    for (let i = 0; i < searchResults.length; i++) {
+      const r = searchResults[i];
+      const idxStr = String(i + 1).padStart(2, ' ');
+      const genreStr = r.genre.slice(0, 14).padEnd(14, ' ');
+      const queryStr = r.query.slice(0, 28).padEnd(28, ' ');
+      const songStr = `${r.topSongTitle.slice(0, 18)} (${r.videoId})`.padEnd(32, ' ');
+      const vStr = r.visionos.statusText.slice(0, 22).padEnd(22, ' ');
+      const aStr = r.androidVr.statusText.slice(0, 22).padEnd(22, ' ');
+
+      console.log(` ${idxStr} | ${genreStr} | ${queryStr} | ${songStr} | ${vStr} | ${aStr}`);
+    }
+    console.log(
+      '------------------------------------------------------------------------------------------------------------------------\n',
+    );
+
+    const vPassed = searchResults.filter((r) => r.visionos.success).length;
+    const aPassed = searchResults.filter((r) => r.androidVr.success).length;
+    const anyPassed = searchResults.filter((r) => r.fallbackPlayable).length;
+    const total = searchResults.length;
+
+    const vAvgLatency =
+      searchResults.map((r) => r.visionos.latencyMs).reduce((a, b) => a + b, 0) / (total || 1);
+    const aAvgLatency =
+      searchResults.map((r) => r.androidVr.latencyMs).reduce((a, b) => a + b, 0) / (total || 1);
+
+    console.log(
+      '========================================================================================================================',
+    );
+    console.log('STRATEGY SUCCESS SUMMARY (SEARCH-DRIVEN TOP TRACKS)');
+    console.log(
+      '========================================================================================================================',
+    );
+    console.log(
+      `  VisionOS:            ${vPassed}/${total} passed (${((vPassed / total) * 100).toFixed(1)}%) | Avg Latency: ${vAvgLatency.toFixed(0)} ms`,
+    );
+    console.log(
+      `  Android VR:          ${aPassed}/${total} passed (${((aPassed / total) * 100).toFixed(1)}%) | Avg Latency: ${aAvgLatency.toFixed(0)} ms`,
+    );
+    console.log(
+      `  Combined Fallback:   ${anyPassed}/${total} playable (${((anyPassed / total) * 100).toFixed(1)}%)`,
+    );
+    console.log(
+      '========================================================================================================================',
+    );
+
+    return {
+      coldStartTimeMs: 0,
+      commandExecutionMs: performance.now() - healthStart,
+      totalTimeMs: performance.now() - healthStart,
+    };
+  }
+
+  // mode === 'fixed'
+  console.log('[CLI] Running stream health check on 20 fixed diverse videos across strategies...\n');
+
+  interface RowResult {
+    target: HealthTarget;
+    visionos: StrategyResult;
+    androidVr: StrategyResult;
+    fallbackPlayable: boolean;
+  }
+
+  const results: RowResult[] = [];
 
   for (let i = 0; i < HEALTH_TARGETS.length; i++) {
     const target = HEALTH_TARGETS[i];
@@ -718,13 +1383,70 @@ async function main(): Promise<void> {
       );
       break;
     }
-    case 'health': {
-      timingDetails = await handleHealth();
+    case 'home': {
+      const shouldRecord = args.includes('--record');
+      timingDetails = await handleHome(shouldRecord);
       break;
     }
-    case 'home':
-      await handleHome();
+    case 'album': {
+      const browseId = args.slice(1).find((a) => !a.startsWith('--'));
+      const shouldRecord = args.includes('--record');
+      timingDetails = await handleAlbum(browseId, shouldRecord);
       break;
+    }
+    case 'artist': {
+      const browseId = args.slice(1).find((a) => !a.startsWith('--'));
+      const shouldRecord = args.includes('--record');
+      timingDetails = await handleArtist(browseId, shouldRecord);
+      break;
+    }
+    case 'playlist': {
+      const playlistId = args.slice(1).find((a) => !a.startsWith('--'));
+      const shouldRecord = args.includes('--record');
+      timingDetails = await handlePlaylist(playlistId, shouldRecord);
+      break;
+    }
+    case 'next': {
+      let videoId = '';
+      let playlistId: string | undefined;
+      let shouldRecord = false;
+
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '--record') {
+          shouldRecord = true;
+        } else if (args[i] === '--playlist' && i + 1 < args.length) {
+          playlistId = args[i + 1];
+          i++;
+        } else if (!args[i].startsWith('--') && !videoId) {
+          videoId = args[i];
+        }
+      }
+
+      timingDetails = await handleNext(videoId, playlistId, shouldRecord);
+      break;
+    }
+    case 'suggest': {
+      const shouldRecord = args.includes('--record');
+      const text = args
+        .slice(1)
+        .filter((a) => !a.startsWith('--'))
+        .join(' ');
+      timingDetails = await handleSuggest(text, shouldRecord);
+      break;
+    }
+    case 'health': {
+      let mode: 'search' | 'fixed' = 'search';
+      if (args.includes('--fixed')) {
+        mode = 'fixed';
+      } else {
+        const modeIdx = args.indexOf('--mode');
+        if (modeIdx !== -1 && modeIdx + 1 < args.length && args[modeIdx + 1] === 'fixed') {
+          mode = 'fixed';
+        }
+      }
+      timingDetails = await handleHealth(mode);
+      break;
+    }
     default:
       console.error(`Unknown command: "${command}"`);
       printUsage();
