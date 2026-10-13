@@ -4,3 +4,8 @@
  */
 
 export const AUTH_MODULE_NAME = 'auth' as const;
+
+export * from './types';
+export * from './session-store';
+export * from './sapisid-hasher';
+export * from './auth-service';

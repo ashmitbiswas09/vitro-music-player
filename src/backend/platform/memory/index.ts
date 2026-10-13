@@ -7,3 +7,4 @@ export * from './memory-secure-store';
 export * from './memory-key-value-store';
 export * from './memory-sql-database';
 export * from './memory-file-store';
+export * from './node-sha1';

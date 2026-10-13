@@ -7,4 +7,5 @@ export * from './rn-secure-store';
 export * from './rn-sqlite-database';
 export * from './rn-key-value-store';
 export * from './rn-file-store';
+export * from './rn-sha1';
 export { FetchHttpClient } from '../adapters/fetch-http-client';

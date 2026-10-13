@@ -6,6 +6,7 @@
 import type { AudioCodec, AudioStream, Clock, Logger, Result, StreamError } from '@/backend/core';
 import type { HttpClient } from '@/backend/platform';
 import type { VisitorDataManager } from '@/backend/innertube';
+import type { AuthService } from '@/backend/auth';
 
 export interface ResolveOptions {
   signal?: AbortSignal;
@@ -86,6 +87,7 @@ export interface StreamResolverOptions {
   preferredCodecs?: AudioCodec[];
   minRequestDelayMs?: number;
   visitorDataManager?: VisitorDataManager;
+  authService?: AuthService;
 }
 
 export interface StreamResolver {

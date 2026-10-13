@@ -14,13 +14,17 @@ import {
   RnSqliteDatabase,
   RnKeyValueStore,
   RnFileStore,
+  RnSha1,
 } from '@/backend/platform/rn';
+import CookieManager from '@react-native-cookies/cookies';
 import { redactString } from '@/backend/core';
 import { CacheKeyBuilder } from '@/backend/cache';
+import { LoginModal } from './LoginModal';
 
 export function DebugScreen() {
   const [output, setOutput] = useState<string>('Ready. Press a button below to test.');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isLoginModalVisible, setIsLoginModalVisible] = useState<boolean>(false);
 
   // Initialize backend singleton wired to native React Native adapters
   const backend = useMemo(() => {
@@ -31,6 +35,10 @@ export function DebugScreen() {
       sqlDatabase: sqlite,
       keyValueStore: new RnKeyValueStore(sqlite),
       fileStore: new RnFileStore(),
+      sha1: new RnSha1(),
+      cookieJarClearer: async () => {
+        await CookieManager.clearAll();
+      },
     });
   }, []);
 
@@ -48,14 +56,27 @@ export function DebugScreen() {
       }
 
       const { items, parseDurationMs, responseSizeBytes } = res.value;
+      const searchKey = CacheKeyBuilder.search('Radiohead', 'all');
+      const fetchMeta = backend.cache.getLastFetchMeta(searchKey);
+      const dataSource = fetchMeta?.source ?? 'network';
+      const freshness = fetchMeta?.freshness ?? 'none';
+
       const lines = [
         `=== SEARCH SUCCESS (${durationMs}ms) ===`,
+        `Data Source: ${dataSource.toUpperCase()}`,
+        `Freshness:   ${freshness === 'none' ? 'NEW (Network Fetch)' : freshness.toUpperCase()}`,
         `Items Count: ${items.length}`,
-        `Parse Time: ${parseDurationMs.toFixed(2)}ms`,
-        `Response Size: ${(responseSizeBytes / 1024).toFixed(2)} KB`,
-        '',
-        '--- First 5 Results ---',
       ];
+
+      if (dataSource === 'network') {
+        lines.push(`Parse Time:    ${parseDurationMs.toFixed(2)}ms`);
+        lines.push(`Response Size: ${(responseSizeBytes / 1024).toFixed(2)} KB`);
+      } else {
+        lines.push(`Parse Time:    N/A (served from ${dataSource} cache)`);
+        lines.push(`Response Size: N/A (cached domain model)`);
+      }
+
+      lines.push('', '--- First 5 Results ---');
 
       items.slice(0, 5).forEach((item, idx) => {
         switch (item.type) {
@@ -99,22 +120,29 @@ export function DebugScreen() {
       }
 
       const { resolved, verification } = res.value;
+      const streamKey = CacheKeyBuilder.stream(videoId);
+      const streamMeta = backend.cache.getLastFetchMeta(streamKey);
+      const streamSource = streamMeta?.source ?? 'network';
+      const streamFreshness = streamMeta?.freshness ?? 'none';
+
       const lines = [
         `=== RESOLVE & VERIFY SUCCESS (${durationMs}ms) ===`,
-        `Video ID: ${videoId}`,
-        `Strategy: ${resolved.strategyName}`,
+        `Video ID:    ${videoId}`,
+        `Data Source: ${streamSource.toUpperCase()} (HTTP verification: NETWORK)`,
+        `Freshness:   ${streamFreshness === 'none' ? 'NEW (Stream Resolved)' : streamFreshness.toUpperCase()}`,
+        `Strategy:    ${resolved.strategyName}`,
         `Audio Codec: ${resolved.stream.codec}`,
-        `Bitrate: ${(resolved.stream.bitrate / 1000).toFixed(1)} kbps`,
-        `Expires At: ${new Date(resolved.stream.expiresAt).toLocaleTimeString()}`,
-        `Loudness: ${resolved.stream.loudnessDb !== undefined ? `${resolved.stream.loudnessDb} dB` : 'N/A'}`,
+        `Bitrate:     ${(resolved.stream.bitrate / 1000).toFixed(1)} kbps`,
+        `Expires At:  ${new Date(resolved.stream.expiresAt).toLocaleTimeString()}`,
+        `Loudness:    ${resolved.stream.loudnessDb !== undefined ? `${resolved.stream.loudnessDb} dB` : 'N/A'}`,
         '',
         '--- HTTP Verification ---',
-        `Playable: ${verification.isPlayable ? 'YES' : 'NO'}`,
-        `HTTP Status: ${verification.statusCode}`,
-        `Content-Type: ${verification.contentType ?? 'none'}`,
-        `Content-Range: ${verification.contentRange ?? 'none'}`,
+        `Playable:       ${verification.isPlayable ? 'YES' : 'NO'}`,
+        `HTTP Status:    ${verification.statusCode}`,
+        `Content-Type:   ${verification.contentType ?? 'none'}`,
+        `Content-Range:  ${verification.contentRange ?? 'none'}`,
         `Bytes Received: ${verification.bytesReceived}`,
-        `TTFB: ${verification.timeToFirstByteMs.toFixed(1)}ms`,
+        `TTFB:           ${verification.timeToFirstByteMs.toFixed(1)}ms`,
         verification.error ? `Verification Error: ${verification.error}` : '',
         '',
         `Redacted URL: ${redactString(resolved.stream.url).slice(0, 80)}...`,
@@ -142,15 +170,31 @@ export function DebugScreen() {
       }
 
       const { sections, continuationToken, parseDurationMs, responseSizeBytes } = res.value;
+      const homeKey = CacheKeyBuilder.home();
+      const fetchMeta = backend.cache.getLastFetchMeta(homeKey);
+      const dataSource = fetchMeta?.source ?? 'network';
+      const freshness = fetchMeta?.freshness ?? 'none';
+
       const lines = [
         `=== HOME FEED SUCCESS (${durationMs}ms) ===`,
+        `Data Source: ${dataSource.toUpperCase()}`,
+        `Freshness:   ${freshness === 'none' ? 'NEW (Network Fetch)' : freshness.toUpperCase()}`,
         `Total Sections: ${sections.length}`,
-        `Parse Time: ${parseDurationMs.toFixed(2)}ms`,
-        `Response Size: ${(responseSizeBytes / 1024).toFixed(2)} KB`,
+      ];
+
+      if (dataSource === 'network') {
+        lines.push(`Parse Time:    ${parseDurationMs.toFixed(2)}ms`);
+        lines.push(`Response Size: ${(responseSizeBytes / 1024).toFixed(2)} KB`);
+      } else {
+        lines.push(`Parse Time:    N/A (served from ${dataSource} cache)`);
+        lines.push(`Response Size: N/A (cached domain model)`);
+      }
+
+      lines.push(
         `Continuation Token: ${continuationToken ? 'Present' : 'None'}`,
         '',
         '--- Sections Overview ---',
-      ];
+      );
 
       sections.forEach((sec, idx) => {
         lines.push(`${idx + 1}. [${sec.title}] ${sec.items.length} items`);
@@ -208,6 +252,7 @@ export function DebugScreen() {
         '',
         '--- Cache Inspection ---',
         `Key:             ${cacheKey}`,
+        `Data Source:     ${inspect.source ? inspect.source.toUpperCase() : 'UNKNOWN'}`,
         `Status:          ${inspect.status.toUpperCase()}`,
         `Is Hit:          ${inspect.isHit ? 'YES' : 'NO'}`,
         `Is Stale:        ${inspect.isStale ? 'YES' : 'NO'}`,
@@ -275,6 +320,7 @@ export function DebugScreen() {
         '',
         '--- Cache Inspection ---',
         `Key:              ${cacheKey}`,
+        `Data Source:      ${inspect.source ? inspect.source.toUpperCase() : 'SQLITE'}`,
         `Status:           ${inspect.status.toUpperCase()}`,
         `Is Hit:           ${inspect.isHit ? 'YES' : 'NO'}`,
         `Items Returned:   ${sqliteRes.value.items.length} items`,
@@ -283,6 +329,60 @@ export function DebugScreen() {
       ];
 
       setOutput(lines.join('\n'));
+    } catch (caught) {
+      setOutput(`[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const checkWhoami = async () => {
+    setIsLoading(true);
+    setOutput('[DEV ONLY] Checking auth session status...');
+    try {
+      const sessionRes = await backend.auth.getSession();
+      if (!sessionRes.ok) {
+        setOutput(`[DEV ONLY] Auth check error: ${sessionRes.error.message}`);
+        return;
+      }
+      if (!sessionRes.value) {
+        setOutput('=== AUTH STATUS (MOBILE) ===\nStatus: NOT SIGNED IN (Guest mode)');
+        return;
+      }
+
+      const session = sessionRes.value;
+      const validateRes = await backend.validateSession();
+      const isValid = validateRes.ok && validateRes.value;
+
+      const lines = [
+        '=== AUTH STATUS (MOBILE) ===',
+        'Status:        SIGNED IN',
+        `Account ID:    ${session.accountId}`,
+        `Session Valid: ${isValid ? 'YES (Verified via YouTube Music)' : 'NO / EXPIRED'}`,
+        `Created At:    ${new Date(session.createdAt).toLocaleString()}`,
+        '',
+        'Cookies and tokens are strictly redacted and never logged or displayed.',
+      ];
+      setOutput(lines.join('\n'));
+    } catch (caught) {
+      setOutput(`[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setIsLoading(true);
+    setOutput('[DEV ONLY] Performing logout...');
+    try {
+      const res = await backend.logout();
+      if (!res.ok) {
+        setOutput(`[DEV ONLY] Logout failed: ${res.error.message}`);
+        return;
+      }
+      setOutput(
+        '=== LOGOUT SUCCESS ===\n1. Stored cookies cleared from SecureStore\n2. Native WebView cookie jar cleared\n3. User-scoped cache cleared\n4. Visitor data reset\n\nStatus: Now in Guest Mode.',
+      );
     } catch (caught) {
       setOutput(`[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`);
     } finally {
@@ -319,11 +419,47 @@ export function DebugScreen() {
         />
       </View>
 
+      <View style={styles.buttonRow}>
+        <Button
+          title="Sign In (WebView)"
+          onPress={() => setIsLoginModalVisible(true)}
+          disabled={isLoading}
+          color="#6a1b9a"
+        />
+        <View style={styles.spacer} />
+        <Button
+          title="Whoami"
+          onPress={checkWhoami}
+          disabled={isLoading}
+          color="#00838f"
+        />
+        <View style={styles.spacer} />
+        <Button
+          title="Logout"
+          onPress={handleLogout}
+          disabled={isLoading}
+          color="#c62828"
+        />
+      </View>
+
       <ScrollView style={styles.outputBox} contentContainerStyle={styles.scrollContent}>
         <Text style={styles.outputText} selectable>
           {output}
         </Text>
       </ScrollView>
+
+      <LoginModal
+        visible={isLoginModalVisible}
+        backend={backend}
+        onClose={() => setIsLoginModalVisible(false)}
+        onSuccess={() => {
+          setIsLoginModalVisible(false);
+          checkWhoami();
+        }}
+        onReportError={(err) => {
+          setOutput(`[DEV ONLY] Sign-In Error:\n${err}`);
+        }}
+      />
     </View>
   );
 }

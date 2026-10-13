@@ -9,12 +9,19 @@ import {
   MemoryKeyValueStore,
   MemorySqlDatabase,
   MemoryFileStore,
+  NodeSha1,
   type HttpClient,
   type SecureStore,
   type KeyValueStore,
   type SqlDatabase,
   type FileStore,
+  type Sha1Port,
 } from '@/backend/platform';
+import {
+  AuthService,
+  type AuthSession,
+  type CookieJarClearer,
+} from '@/backend/auth';
 import {
   InnertubeClient,
   type SearchOptions,
@@ -43,7 +50,7 @@ import {
   type CacheStats,
   type GetOrFetchOptions,
 } from '@/backend/cache';
-import type { Result, AppError, StreamError, Clock } from '@/backend/core';
+import type { Result, AppError, StreamError, AuthError, Clock } from '@/backend/core';
 import { MusicRepository } from './music-repository';
 
 export const SERVICES_MODULE_NAME = 'services' as const;
@@ -55,7 +62,9 @@ export interface BackendAdapters {
   keyValueStore?: KeyValueStore;
   sqlDatabase?: SqlDatabase;
   fileStore?: FileStore;
+  sha1?: Sha1Port;
   clock?: Clock;
+  cookieJarClearer?: CookieJarClearer;
 }
 
 export interface Backend {
@@ -64,12 +73,14 @@ export interface Backend {
   readonly prefetcher: PrefetchPlanner;
   readonly innertube: InnertubeClient;
   readonly streaming: StreamResolver;
+  readonly auth: AuthService;
   readonly adapters: {
     readonly httpClient: HttpClient;
     readonly secureStore: SecureStore;
     readonly keyValueStore: KeyValueStore;
     readonly sqlDatabase: SqlDatabase;
     readonly fileStore: FileStore;
+    readonly sha1: Sha1Port;
   };
   search(
     query: string,
@@ -110,6 +121,10 @@ export interface Backend {
   clearMemoryTier(): void;
   clearCache(): Promise<void>;
   getCacheStats(): Promise<CacheStats>;
+  setSessionFromCookies(cookies: Record<string, string> | string): Promise<Result<AuthSession, AuthError>>;
+  validateSession(): Promise<Result<boolean, AuthError>>;
+  logout(): Promise<Result<void, AuthError>>;
+  isSignedIn(): Promise<boolean>;
 }
 
 export function createBackend(adapters: BackendAdapters = {}): Backend {
@@ -118,6 +133,7 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
   const sqlDatabase = adapters.sqlDatabase ?? new MemorySqlDatabase();
   const keyValueStore = adapters.keyValueStore ?? new MemoryKeyValueStore();
   const fileStore = adapters.fileStore ?? new MemoryFileStore();
+  const sha1 = adapters.sha1 ?? new NodeSha1();
   const clock = adapters.clock;
 
   const cache = new CacheManager({
@@ -130,14 +146,31 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     keyValueStore,
   });
 
+  const auth = new AuthService({
+    secureStore,
+    sha1,
+    httpClient,
+    clock,
+    cookieJarClearer: adapters.cookieJarClearer,
+    onLogout: async () => {
+      await cache.clearUserScopedData();
+      await innertube.resetVisitorData();
+    },
+  });
+
+  innertube.setAuthService(auth);
+
   const streaming = new DefaultStreamResolver({
     httpClient,
+    clock,
+    authService: auth,
   });
 
   const repository = new MusicRepository({
     innertube,
     streamResolver: streaming,
     cache,
+    authService: auth,
   });
 
   const prefetcher = new PrefetchPlanner(cache, streaming, clock);
@@ -148,12 +181,14 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     prefetcher,
     innertube,
     streaming,
+    auth,
     adapters: {
       httpClient,
       secureStore,
       keyValueStore,
       sqlDatabase,
       fileStore,
+      sha1,
     },
     search: (query, options) => repository.search(query, options),
     resolveStream: (videoId, options) => repository.resolveStream(videoId, options),
@@ -170,5 +205,9 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     clearMemoryTier: () => repository.clearMemoryTier(),
     clearCache: () => cache.clear(),
     getCacheStats: () => cache.getStats(),
+    setSessionFromCookies: (cookies) => auth.setSessionFromCookies(cookies),
+    validateSession: () => auth.validateSession(),
+    logout: () => auth.logout(),
+    isSignedIn: () => auth.isSignedIn(),
   };
 }

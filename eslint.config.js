@@ -23,7 +23,7 @@ const ALLOWED_DEPENDENCIES = {
   innertube: ['core', 'platform', 'auth'],
   auth: ['core', 'platform'],
   cache: ['core', 'platform'],
-  streaming: ['core', 'platform', 'innertube'],
+  streaming: ['core', 'platform', 'innertube', 'auth'],
   library: ['core', 'platform', 'innertube', 'auth', 'cache'],
   'playback-core': ['core', 'platform', 'streaming', 'innertube', 'cache'],
   lyrics: ['core', 'platform'],

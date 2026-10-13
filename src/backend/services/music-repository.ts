@@ -39,22 +39,37 @@ import {
   type CacheStats,
   CacheKeyBuilder,
 } from '@/backend/cache';
+import type { AuthService } from '@/backend/auth';
 
 export interface RepositoryOptions {
   innertube: InnertubeClient;
   streamResolver: StreamResolver;
   cache: CacheManager;
+  authService?: AuthService;
 }
 
 export class MusicRepository {
   private readonly innertube: InnertubeClient;
   private readonly streamResolver: StreamResolver;
   private readonly cache: CacheManager;
+  private readonly authService?: AuthService;
 
   constructor(options: RepositoryOptions) {
     this.innertube = options.innertube;
     this.streamResolver = options.streamResolver;
     this.cache = options.cache;
+    this.authService = options.authService;
+  }
+
+  private async resolveScope(explicitScope?: string): Promise<string> {
+    if (explicitScope) return explicitScope;
+    if (this.authService) {
+      const sessionRes = await this.authService.getSession();
+      if (sessionRes.ok && sessionRes.value) {
+        return `user:${sessionRes.value.accountId}`;
+      }
+    }
+    return 'guest';
   }
 
   /**
@@ -63,12 +78,13 @@ export class MusicRepository {
   async getHome(
     options: EndpointOptions & GetOrFetchOptions = {},
   ): Promise<Result<HomeFeedResponse, AppError>> {
-    const key = CacheKeyBuilder.home(options.scope);
+    const scope = await this.resolveScope(options.scope);
+    const key = CacheKeyBuilder.home(scope);
     return this.cache.getOrFetch(
       key,
       'home',
       () => this.innertube.getHome(options),
-      options,
+      { ...options, scope },
     );
   }
 
@@ -90,12 +106,13 @@ export class MusicRepository {
     query: string,
     options: SearchOptions & GetOrFetchOptions = {},
   ): Promise<Result<SearchResponse, AppError>> {
-    const key = CacheKeyBuilder.search(query, options.filter, options.scope);
+    const scope = await this.resolveScope(options.scope);
+    const key = CacheKeyBuilder.search(query, options.filter, scope);
     return this.cache.getOrFetch(
       key,
       'search',
       () => this.innertube.search(query, options),
-      options,
+      { ...options, scope },
     );
   }
 

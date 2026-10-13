@@ -29,6 +29,7 @@ import type {
   EndpointOptions,
   InnertubeClientOptions,
 } from './types';
+import type { AuthSession, AuthService } from '@/backend/auth';
 import { ContextBuilder } from './context/context-builder';
 import { VisitorDataManager } from './visitor/visitor-data-manager';
 import { parseSearchResponse } from './parsers/search-parser';
@@ -56,6 +57,8 @@ export class InnertubeClient {
   private readonly contextBuilder: ContextBuilder;
   private readonly visitorManager: VisitorDataManager;
   private readonly logger: Logger;
+  private authService?: AuthService;
+  private authSession?: AuthSession | null;
 
   constructor(options: InnertubeClientOptions) {
     this.httpClient = options.httpClient;
@@ -71,6 +74,16 @@ export class InnertubeClient {
       config: this.config,
     });
     this.logger = options.logger ?? createLogger({ prefix: 'Innertube' });
+    this.authService = options.authService;
+    this.authSession = options.authSession;
+  }
+
+  setAuthService(authService?: AuthService): void {
+    this.authService = authService;
+  }
+
+  setAuthSession(session?: AuthSession | null): void {
+    this.authSession = session;
   }
 
   async getVisitorData(): Promise<string | undefined> {
@@ -81,6 +94,10 @@ export class InnertubeClient {
     return this.visitorManager.setVisitorData(visitorData);
   }
 
+  async resetVisitorData(): Promise<void> {
+    await this.visitorManager.resetVisitorData();
+  }
+
   private async postEndpoint(
     endpointPath: string,
     bodyParams: Record<string, unknown>,
@@ -88,7 +105,28 @@ export class InnertubeClient {
   ): Promise<Result<unknown, AppError>> {
     const visitorData = options.visitorData ?? (await this.visitorManager.getVisitorData());
     const body = this.contextBuilder.buildBody(bodyParams, visitorData);
-    const headers = this.contextBuilder.buildHeaders(visitorData);
+    let headers = this.contextBuilder.buildHeaders(visitorData);
+
+    // Attach authentication credentials if active
+    if (options.authSession) {
+      headers = {
+        ...headers,
+        Cookie: options.authSession.cookieHeader,
+        'X-Origin': this.config.origin,
+      };
+    } else if (this.authService) {
+      const authHeadersRes = await this.authService.getAuthHeaders(this.config.origin);
+      if (authHeadersRes.ok) {
+        headers = { ...headers, ...authHeadersRes.value };
+      }
+    } else if (this.authSession) {
+      headers = {
+        ...headers,
+        Cookie: this.authSession.cookieHeader,
+        'X-Origin': this.config.origin,
+      };
+    }
+
     const url = `${this.config.baseUrl}/${endpointPath}`;
 
     const fetchRes = await retryAsync(

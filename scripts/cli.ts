@@ -19,6 +19,7 @@ import {
   handleNext,
   handleSuggest,
   handleCache,
+  handleWhoami,
 } from './commands';
 
 const coldStartBegin = performance.now();
@@ -160,6 +161,10 @@ async function main(): Promise<void> {
       const subcommand = args[1] ?? 'stats';
       const targetArg = args[2];
       timingDetails = await handleCache(subcommand, targetArg);
+      break;
+    }
+    case 'whoami': {
+      timingDetails = await handleWhoami();
       break;
     }
     default:

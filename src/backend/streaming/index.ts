@@ -28,6 +28,10 @@ export {
   AndroidVrStreamStrategy,
   type AndroidVrStrategyOptions,
 } from './strategies/android-vr-strategy';
+export {
+  AuthenticatedStreamStrategy,
+  type AuthenticatedStrategyConfig,
+} from './strategies/authenticated-strategy';
 
 export {
   parsePlayerResponse,

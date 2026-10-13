@@ -225,3 +225,81 @@ The cache strictly stores parsed domain models rather than raw InnerTube JSON pa
 - `cache` is **strictly prohibited from importing `innertube` or `streaming`** (enforced by ESLint).
 - The repository layer (`MusicRepository` in `services`) serves as the mediator between InnerTube, Streaming, and Cache.
 
+---
+
+## 8. Auth Module Architecture
+
+### Overview
+
+The auth module (`src/backend/auth`) provides headless session management, encrypted persistent credentials storage, cryptographic request signature generation (`SAPISIDHASH`), session health checks, and secure logout orchestration.
+
+```mermaid
+flowchart TD
+    LoginModal[Dev WebView Sign-In] -->|Cookie Jar String| AuthService
+    AuthService -->|parseCookieString| Session[AuthSession]
+    Session -->|Chunk <= 1500B| SessionStore
+    SessionStore -->|auth_session_chunk_N| SecureStore[SecureStore Port]
+    
+    Innertube[InnertubeClient] -->|getAuthHeaders| AuthService
+    AuthService -->|SAPISID + Timestamp| Sha1Port[Sha1Port (Crypto)]
+    Sha1Port -->|SHA1 Digest| Hash[SAPISIDHASH Header]
+    
+    Resolver[StreamResolver] -->|recoverableWithAuth?| AuthStrat[AuthenticatedStreamStrategy]
+    AuthStrat -->|Signed Headers| YTMPlayer[InnerTube Player Endpoint]
+
+    Logout[AuthService.logout] --> ClearStore[Clear SecureStore Chunks]
+    Logout --> ClearMemory[Clear Memory Session]
+    Logout --> ClearCookies[Clear WebView Cookie Jar]
+    Logout --> ClearCache[cache.clearUserScopedData]
+    Logout --> ClearVisitor[innertube.resetVisitorData]
+```
+
+### Chunked SecureStore Storage
+
+- **Android SharedPreferences Limit**: Android's `SharedPreferences` (used by `expo-secure-store`) limits single entry sizes to ~2048 bytes. Standard YouTube Music session cookie headers frequently exceed 3–6 KB.
+- **Chunking Algorithm**: `SessionStore` serializes `AuthSession` JSON and divides the string into slices of `SESSION_CHUNK_SIZE` (1500 bytes).
+  - Slices are saved as `auth_session_chunk_0`, `auth_session_chunk_1`, etc.
+  - Metadata `auth_session_chunk_count` tracks chunk count.
+  - Surplus chunks from prior writes are explicitly deleted during overwrites.
+  - `SessionStore` falls back to reading legacy non-chunked keys if upgrading.
+
+### Cryptographic Hash Port (`Sha1Port`)
+
+- **Port Interface**: `Sha1Port { digestHex(data: string): Promise<string> }` defined in `src/backend/platform/types.ts`.
+- **Node Adapter**: `NodeSha1` in `src/backend/platform/memory/node-sha1.ts` using Node's standard `node:crypto`.
+- **React Native Adapter**: `RnSha1` in `src/backend/platform/rn/rn-sha1.ts` using `expo-crypto` (`Crypto.digestStringAsync`).
+- **Signature Calculation**: YouTube Music authenticated requests require an authorization header generated as:
+  $$\text{SAPISIDHASH } = \text{timestamp} + \text{"\_"} + \text{SHA1}(\text{timestamp} + \text{" "} + \text{SAPISID} + \text{" "} + \text{origin})$$
+  with default origin `https://music.youtube.com`.
+
+### Authenticated InnerTube & Cache Scoping
+
+- **InnerTube Ingestion**: When `AuthService.isSignedIn()` is true, `InnertubeClient` attaches:
+  - `Authorization: SAPISIDHASH <timestamp>_<digest>`
+  - `Cookie: <serialized session cookies>`
+  - `X-Origin: https://music.youtube.com`
+- **Cache Scoping**: In `MusicRepository`, cache queries dynamically use scope `user:<accountId>` when signed in versus `guest` when anonymous. This guarantees that user and guest queries never collide or share cache keys.
+
+### Authenticated Stream Fallback
+
+- When guest stream strategies fail with `recoverableWithAuth === true` (e.g. `LOGIN_REQUIRED` on age-restricted or premium tracks):
+- `DefaultStreamResolver` automatically falls back to `AuthenticatedStreamStrategy` if an auth session is active.
+- Uses `WEB_REMIX` client context combined with signed session headers.
+
+### Full Logout Lifecycle
+
+Invoking `authService.logout()` executes atomic cleanup across all tiers:
+1. Deletes all encrypted session chunks and metadata from `SecureStore`.
+2. Resets the in-memory active session reference to `null`.
+3. Invokes the native cookie jar clearer (`@react-native-cookies/cookies` `CookieManager.clearAll()`).
+4. Executes `cache.clearUserScopedData()`, wiping all SQLite and memory entries under `auth:user:*`.
+5. Executes `innertube.resetVisitorData()`, clearing the anonymous visitor token from memory and `KeyValueStore`.
+
+### Security & Privacy Enforcements
+
+1. **Zero Credentials in Code/Logs**: No tokens, passwords, cookies, or account emails are ever logged or hardcoded.
+2. **Logged Redaction**: HTTP client and error loggers automatically redact `Authorization`, `Cookie`, `X-Goog-Visitor-Id`, and `SAPISIDHASH`.
+3. **Recorded vs Sanitized Fixtures**: Any response recorded while authenticated is strictly confined to `fixtures/recorded/` (which is gitignored) and must **never** be checked into `fixtures/sanitized/`.
+4. **Whoami Anonymity**: The CLI `whoami` check reports only boolean sign-in status and anonymized deterministic account hashes (`account_<sha1_prefix>`), never cookies or personal user profiles.
+
+

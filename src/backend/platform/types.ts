@@ -82,3 +82,8 @@ export interface FileStore {
   makeDir(path: string): Promise<Result<void, StorageError>>;
   getMetadata(path: string): Promise<Result<FileMetadata, StorageError>>;
 }
+
+export interface Sha1Port {
+  /** Computes the hex-encoded SHA-1 digest of the given input string */
+  digestHex(data: string): Promise<string>;
+}

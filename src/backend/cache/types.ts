@@ -72,6 +72,13 @@ export interface CacheEntry<T = unknown> {
 }
 
 export type CacheHitStatus = 'fresh' | 'stale' | 'miss';
+export type CacheDataSource = 'network' | 'memory' | 'sqlite';
+export type CacheFreshness = 'fresh' | 'stale' | 'none';
+
+export interface CacheFetchMeta {
+  source: CacheDataSource;
+  freshness: CacheFreshness;
+}
 
 export interface CacheGetResult<T> {
   status: CacheHitStatus;
@@ -81,6 +88,7 @@ export interface CacheGetResult<T> {
   staleUntil?: number;
   isHit: boolean;
   isStale: boolean;
+  source?: 'memory' | 'sqlite';
 }
 
 export interface CacheStats {

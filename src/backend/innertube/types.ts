@@ -1,9 +1,6 @@
-/**
- * Types and interfaces for the InnerTube module.
- */
-
 import type { Track, Album, Artist, Playlist, InnertubeClientConfig, Logger } from '@/backend/core';
 import type { HttpClient, KeyValueStore } from '@/backend/platform';
+import type { AuthSession, AuthService } from '@/backend/auth';
 
 export type SearchFilter = 'all' | 'songs' | 'albums' | 'artists' | 'playlists' | 'videos';
 
@@ -87,6 +84,7 @@ export interface ContinuationResponse {
 export interface EndpointOptions {
   signal?: AbortSignal;
   visitorData?: string;
+  authSession?: AuthSession;
 }
 
 export interface NextOptions extends EndpointOptions {
@@ -104,4 +102,6 @@ export interface InnertubeClientOptions {
   config?: Partial<InnertubeClientConfig>;
   visitorDataOverride?: string;
   logger?: Logger;
+  authService?: AuthService;
+  authSession?: AuthSession;
 }

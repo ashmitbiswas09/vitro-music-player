@@ -96,12 +96,22 @@ export class NotFoundError extends AppError {
   }
 }
 
+export type AuthErrorReason =
+  | 'EXPIRED'
+  | 'UNAUTHORIZED'
+  | 'INVALID_CREDENTIALS'
+  | 'MISSING_SESSION'
+  | 'STORAGE_ERROR'
+  | 'INVALID_COOKIES'
+  | 'VALIDATION_FAILED'
+  | 'NETWORK_ERROR';
+
 export class AuthError extends AppError {
-  readonly reason: 'EXPIRED' | 'UNAUTHORIZED' | 'INVALID_CREDENTIALS' | 'MISSING_SESSION';
+  readonly reason: AuthErrorReason;
 
   constructor(
     message: string,
-    reason: 'EXPIRED' | 'UNAUTHORIZED' | 'INVALID_CREDENTIALS' | 'MISSING_SESSION',
+    reason: AuthErrorReason,
     details?: AppErrorDetails,
     cause?: unknown,
   ) {

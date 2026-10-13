@@ -30,6 +30,8 @@ import type {
 } from './types';
 import { VisionOsStreamStrategy } from './strategies/visionos-strategy';
 import { AndroidVrStreamStrategy } from './strategies/android-vr-strategy';
+import { AuthenticatedStreamStrategy } from './strategies/authenticated-strategy';
+import type { AuthService } from '@/backend/auth';
 
 export class DefaultStreamResolver implements StreamResolver {
   private readonly httpClient: HttpClient;
@@ -40,6 +42,8 @@ export class DefaultStreamResolver implements StreamResolver {
   private readonly minRequestDelayMs: number;
   private readonly visitorDataManager?: VisitorDataManager;
   private readonly cache = new Map<string, ResolvedStream>();
+  private authService?: AuthService;
+  private authenticatedStrategy?: AuthenticatedStreamStrategy;
   private lastRequestTime = 0;
 
   constructor(options: StreamResolverOptions) {
@@ -48,6 +52,15 @@ export class DefaultStreamResolver implements StreamResolver {
     this.logger = options.logger ?? createLogger({ prefix: 'StreamResolver' });
     this.preferredCodecs = options.preferredCodecs ?? ['opus', 'aac', 'other'];
     this.minRequestDelayMs = options.minRequestDelayMs ?? 300;
+    this.authService = options.authService;
+    if (options.authService) {
+      this.authenticatedStrategy = new AuthenticatedStreamStrategy(this.httpClient, {
+        authService: options.authService,
+        preferredCodecs: this.preferredCodecs,
+        clock: this.clock,
+        logger: this.logger,
+      });
+    }
     this.visitorDataManager =
       options.visitorDataManager ??
       new VisitorDataManager({
@@ -70,6 +83,20 @@ export class DefaultStreamResolver implements StreamResolver {
               logger: this.logger,
             }),
           ];
+  }
+
+  setAuthService(authService?: AuthService): void {
+    this.authService = authService;
+    if (authService) {
+      this.authenticatedStrategy = new AuthenticatedStreamStrategy(this.httpClient, {
+        authService,
+        preferredCodecs: this.preferredCodecs,
+        clock: this.clock,
+        logger: this.logger,
+      });
+    } else {
+      this.authenticatedStrategy = undefined;
+    }
   }
 
   private async throttle(): Promise<void> {
@@ -109,6 +136,7 @@ export class DefaultStreamResolver implements StreamResolver {
 
     // 2. Iterate through strategies with automatic fallback
     const attempts: { strategy: string; error: string; reason: string }[] = [];
+    let hadRecoverableWithAuth = false;
 
     for (const strategy of this.strategies) {
       await this.throttle();
@@ -124,6 +152,10 @@ export class DefaultStreamResolver implements StreamResolver {
         return res;
       }
 
+      if (res.error.recoverableWithAuth) {
+        hadRecoverableWithAuth = true;
+      }
+
       this.logger.warn(
         `Strategy "${strategy.name}" failed for video "${videoId}": ${res.error.message}`,
         {
@@ -137,12 +169,49 @@ export class DefaultStreamResolver implements StreamResolver {
       });
     }
 
+    // 3. Fallback to authenticated strategy if an active signed-in session is present and stream is recoverable with auth
+    if (hadRecoverableWithAuth && this.authenticatedStrategy && this.authService) {
+      const signedIn = await this.authService.isSignedIn();
+      if (signedIn) {
+        this.logger.info(
+          `Attempting authenticated strategy fallback for "${videoId}" (recoverableWithAuth)`,
+        );
+        await this.throttle();
+        const authRes = await this.authenticatedStrategy.resolve(videoId, resolveOpts);
+
+        if (authRes.ok) {
+          this.logger.info(
+            `Successfully resolved stream for "${videoId}" via "${this.authenticatedStrategy.name}"`,
+            {
+              codec: authRes.value.stream.codec,
+              bitrate: authRes.value.stream.bitrate,
+              expiresAt: authRes.value.stream.expiresAt,
+            },
+          );
+          this.cache.set(videoId, authRes.value);
+          return authRes;
+        }
+
+        this.logger.warn(
+          `Authenticated strategy failed for video "${videoId}": ${authRes.error.message}`,
+          { reason: authRes.error.reason },
+        );
+        attempts.push({
+          strategy: this.authenticatedStrategy.name,
+          error: authRes.error.message,
+          reason: authRes.error.reason,
+        });
+      }
+    }
+
     return err(
       new StreamError(
         `All stream resolution strategies failed for videoId "${videoId}"`,
         videoId,
         'ALL_STRATEGIES_FAILED',
         { attempts },
+        undefined,
+        hadRecoverableWithAuth,
       ),
     );
   }

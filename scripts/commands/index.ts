@@ -14,3 +14,4 @@ export * from './playlist';
 export * from './next';
 export * from './suggest';
 export * from './cache';
+export * from './whoami';

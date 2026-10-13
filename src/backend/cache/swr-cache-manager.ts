@@ -24,6 +24,7 @@ import {
   type CacheGetResult,
   type CacheStats,
   type GetOrFetchOptions,
+  type CacheFetchMeta,
   DEFAULT_CACHE_POLICIES,
   CacheKeyBuilder,
 } from './types';
@@ -43,6 +44,7 @@ export class CacheManager {
   private readonly clock: Clock;
   private readonly policies: Record<CacheDataType, CachePolicy>;
   private readonly subscribers = new Map<string, Set<(freshData: unknown) => void>>();
+  private readonly lastMeta = new Map<string, CacheFetchMeta>();
 
   // Metrics
   private hits = 0;
@@ -81,6 +83,7 @@ export class CacheManager {
           staleUntil: memEntry.staleUntil,
           isHit: true,
           isStale: false,
+          source: 'memory',
         };
       }
       if (now < memEntry.staleUntil) {
@@ -92,6 +95,7 @@ export class CacheManager {
           staleUntil: memEntry.staleUntil,
           isHit: true,
           isStale: true,
+          source: 'memory',
         };
       }
       // Expired in memory: remove
@@ -114,6 +118,7 @@ export class CacheManager {
             staleUntil: sqlEntry.staleUntil,
             isHit: true,
             isStale: false,
+            source: 'sqlite',
           };
         }
         if (now < sqlEntry.staleUntil) {
@@ -125,6 +130,7 @@ export class CacheManager {
             staleUntil: sqlEntry.staleUntil,
             isHit: true,
             isStale: true,
+            source: 'sqlite',
           };
         }
         // Expired in SQLite: remove
@@ -133,6 +139,14 @@ export class CacheManager {
     }
 
     return { status: 'miss', isHit: false, isStale: false };
+  }
+
+  /**
+   * Retrieves the fetch metadata (source: network | memory | sqlite, freshness: fresh | stale | none)
+   * for the most recent resolution of a cache key.
+   */
+  getLastFetchMeta(key: string): CacheFetchMeta | undefined {
+    return this.lastMeta.get(key);
   }
 
   /**
@@ -148,6 +162,7 @@ export class CacheManager {
     options: GetOrFetchOptions = {},
   ): Promise<Result<T, E>> {
     if (options.skipCache) {
+      this.lastMeta.set(key, { source: 'network', freshness: 'none' });
       return this.deduper.dedupe(key, fetcher);
     }
 
@@ -156,12 +171,14 @@ export class CacheManager {
 
       if (cached.status === 'fresh' && cached.data !== undefined) {
         this.hits++;
+        this.lastMeta.set(key, { source: cached.source ?? 'memory', freshness: 'fresh' });
         return ok(cached.data);
       }
 
       if (cached.status === 'stale' && cached.data !== undefined) {
         this.hits++;
         this.staleHits++;
+        this.lastMeta.set(key, { source: cached.source ?? 'memory', freshness: 'stale' });
 
         // Trigger background revalidation asynchronously without blocking caller
         this.revalidateInBackground(key, dataType, fetcher, options);
@@ -172,6 +189,7 @@ export class CacheManager {
 
     // Cache miss or forceRefresh
     this.misses++;
+    this.lastMeta.set(key, { source: 'network', freshness: 'none' });
     const fetchResult = await this.deduper.dedupe(key, fetcher);
 
     if (isOk(fetchResult)) {

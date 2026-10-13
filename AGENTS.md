@@ -7,7 +7,18 @@ This is an Expo/React Native mobile application. Prioritize mobile-first pattern
 - **Ports & Adapters**: Modules depend only on interfaces and `core`. Platform-specific APIs are implemented via adapters (`platform/rn` for mobile, `platform/memory` for tests/CLI).
 - **Module Encapsulation**: Each module exposes only its public API via `index.ts`. Cross-module internal imports are strictly forbidden and enforced by ESLint.
 - **Strict TypeScript & Zod**: Strict mode enabled. No `any`. Validate all external API responses defensively at the boundary using Zod.
-- **Security & Privacy**: Never log or commit credentials, cookies, or tokens. Logger must redact sensitive headers/data.
+- **Security & Privacy**:
+  - Never log, print, or commit credentials, cookies, tokens, or personal account identifiers.
+  - Logger must redact sensitive headers (`Authorization`, `Cookie`, `X-Goog-Visitor-Id`, `SAPISIDHASH`).
+  - Any raw recorded response from a signed-in session must go ONLY into the gitignored `fixtures/recorded/` directory and NEVER into `fixtures/sanitized/` or version control.
+  - CLI commands such as `whoami` report only binary signed-in/signed-out state and non-sensitive hashes, never user email or raw cookie values.
+- **Auth Architecture**:
+  - Session storage in `SecureStore` must be chunked (<= 1500 bytes/chunk) to prevent Android 2048-byte `SharedPreferences` limits.
+  - Request signing generates `SAPISIDHASH` through the `Sha1Port` abstraction (`expo-crypto` in RN, `node:crypto` in tests/CLI).
+  - Logout must atomically clear stored session chunks, wipe native WebView cookie jars, reset `visitorData`, and purge user-scoped cache (`cache.clearUserScopedData()`).
+- **Dependency Rules**:
+  - Before adding ANY native or Expo package, ask the user first and justify it in one line.
+  - Install only SDK-compatible packages with `npx expo install <package>`.
 - **Verification**: Always run `npm test`, `npm run lint`, and `npm run typecheck` before declaring any task complete.
 
 ## Expo & Development Commands
@@ -18,6 +29,7 @@ npm run test                # Run unit tests via Vitest in plain Node
 npm run lint                # Run ESLint (includes architectural boundary checks)
 npm run typecheck           # TypeScript typecheck (tsc --noEmit)
 npm run cli -- <command>    # Run backend CLI for terminal testing without emulator
+npm run cli -- whoami       # Inspect auth state without exposing credentials
 npx expo start              # Start the dev server
 ```
 

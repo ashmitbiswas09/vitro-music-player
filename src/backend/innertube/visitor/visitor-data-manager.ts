@@ -70,6 +70,13 @@ export class VisitorDataManager {
     }
   }
 
+  async resetVisitorData(): Promise<void> {
+    this.inMemoryVisitorData = undefined;
+    if (this.keyValueStore) {
+      await this.keyValueStore.delete(VISITOR_DATA_KEY);
+    }
+  }
+
   async updateFromResponse(responseBody: unknown): Promise<void> {
     if (this.override || !responseBody || typeof responseBody !== 'object') return;
 
