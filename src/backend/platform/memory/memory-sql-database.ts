@@ -101,6 +101,48 @@ export class MemorySqlDatabase implements SqlDatabase {
       return ok({ rows: [], rowsAffected: initialLen - remaining.length });
     }
 
+    // UPDATE simulation: UPDATE tableName SET col1 = ?, col2 = ? [WHERE ...]
+    const updateMatch = sql.match(/update\s+([a-zA-Z0-9_]+)\s+set\s+(.+?)(?:\s+where\s+(.+))?$/i);
+    if (updateMatch) {
+      const tableName = updateMatch[1];
+      const setClause = updateMatch[2];
+      const whereClause = updateMatch[3];
+      const table = this.tables.get(tableName);
+      if (!table) {
+        return ok({ rows: [], rowsAffected: 0 });
+      }
+
+      // Parse assignments e.g. "status = ?, retry_count = ?"
+      const assignments = setClause.split(',').map((a) => a.trim());
+      let paramIndex = 0;
+      const updates: { col: string; val: unknown }[] = [];
+      for (const assignment of assignments) {
+        const parts = assignment.split('=').map((p) => p.trim());
+        if (parts.length === 2) {
+          const col = parts[0];
+          const valExpr = parts[1];
+          if (valExpr === '?') {
+            updates.push({ col, val: params[paramIndex++] });
+          } else {
+            updates.push({ col, val: valExpr.replace(/^['"]|['"]$/g, '') });
+          }
+        }
+      }
+
+      const whereParams = params.slice(paramIndex);
+      let updatedCount = 0;
+      for (const row of table) {
+        if (!whereClause || this.evaluateWhere(row, whereClause, whereParams)) {
+          for (const { col, val } of updates) {
+            row[col] = val;
+          }
+          updatedCount++;
+        }
+      }
+
+      return ok({ rows: [], rowsAffected: updatedCount });
+    }
+
     return ok({ rows: [], rowsAffected: 1 });
   }
 
@@ -112,9 +154,9 @@ export class MemorySqlDatabase implements SqlDatabase {
       return ok([]);
     }
 
-    // SELECT COUNT(*) as count FROM tableName [WHERE ...]
+    // SELECT COUNT(*) as count FROM tableName [WHERE ...] [ORDER BY ...]
     const countMatch = sql.match(
-      /select\s+count\(\*\)\s+(?:as\s+count\s+)?from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+))?/i,
+      /select\s+count\(\*\)\s+(?:as\s+count\s+)?from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+?))?(?:\s+order\s+by\s+.+)?$/i,
     );
     if (countMatch) {
       const tableName = countMatch[1];
@@ -126,15 +168,32 @@ export class MemorySqlDatabase implements SqlDatabase {
       return ok([{ count: matching.length }] as unknown as T[]);
     }
 
-    // SELECT ... FROM tableName [WHERE ...]
-    const selectMatch = sql.match(/select\s+.*?\s+from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+))?/i);
+    // SELECT ... FROM tableName [WHERE ...] [ORDER BY ...]
+    const selectMatch = sql.match(
+      /select\s+.*?\s+from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+?))?(?:\s+order\s+by\s+(.+))?$/i,
+    );
     if (selectMatch) {
       const tableName = selectMatch[1];
       const whereClause = selectMatch[2];
+      const orderClause = selectMatch[3];
       const table = this.tables.get(tableName) ?? [];
-      const matching = whereClause
+      let matching = whereClause
         ? table.filter((row) => this.evaluateWhere(row, whereClause, params))
-        : table;
+        : [...table];
+
+      if (orderClause) {
+        const orderParts = orderClause.trim().split(/\s+/);
+        const col = orderParts[0];
+        const isDesc = orderParts[1]?.toLowerCase() === 'desc';
+        matching.sort((a, b) => {
+          const aVal = a[col] as number | string;
+          const bVal = b[col] as number | string;
+          if (aVal === bVal) return 0;
+          if (aVal > bVal) return isDesc ? -1 : 1;
+          return isDesc ? 1 : -1;
+        });
+      }
+
       return ok([...matching] as unknown as T[]);
     }
 

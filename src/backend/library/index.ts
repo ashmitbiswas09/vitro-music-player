@@ -4,3 +4,7 @@
  */
 
 export const LIBRARY_MODULE_NAME = 'library' as const;
+
+export * from './types';
+export * from './mutation-queue';
+export * from './library-service';

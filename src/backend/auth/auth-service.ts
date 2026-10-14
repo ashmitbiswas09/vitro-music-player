@@ -174,6 +174,7 @@ export class AuthService {
         Authorization: authHeader,
         Cookie: session.cookieHeader,
         'X-Origin': origin,
+        'X-Goog-AuthUser': '0',
       });
     } catch (caught) {
       return err(

@@ -251,6 +251,18 @@ export class CacheManager {
   }
 
   /**
+   * Alias for put. Writes entry into both L1 in-memory and L2 SQLite cache.
+   */
+  async set<T>(
+    key: string,
+    dataType: CacheDataType,
+    value: T,
+    options: GetOrFetchOptions = {},
+  ): Promise<void> {
+    return this.put(key, dataType, value, options);
+  }
+
+  /**
    * Subscribe to background updates for a cache key.
    */
   subscribe<T>(key: string, callback: (freshData: T) => void): () => void {

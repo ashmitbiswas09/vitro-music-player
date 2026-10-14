@@ -50,6 +50,15 @@ import {
   type CacheStats,
   type GetOrFetchOptions,
 } from '@/backend/cache';
+import {
+  LibraryService,
+  type UserPlaylistsResult,
+  type LikedSongsResult,
+  type HistoryResult,
+  type LibraryFetchOptions,
+  type LikeStatus,
+  type OptimisticMutationResult,
+} from '@/backend/library';
 import type { Result, AppError, StreamError, AuthError, Clock } from '@/backend/core';
 import { MusicRepository } from './music-repository';
 
@@ -74,6 +83,7 @@ export interface Backend {
   readonly innertube: InnertubeClient;
   readonly streaming: StreamResolver;
   readonly auth: AuthService;
+  readonly library: LibraryService;
   readonly adapters: {
     readonly httpClient: HttpClient;
     readonly secureStore: SecureStore;
@@ -125,6 +135,14 @@ export interface Backend {
   validateSession(): Promise<Result<boolean, AuthError>>;
   logout(): Promise<Result<void, AuthError>>;
   isSignedIn(): Promise<boolean>;
+  fetchUserPlaylists(options?: LibraryFetchOptions): Promise<Result<UserPlaylistsResult, AppError>>;
+  fetchLikedSongs(options?: LibraryFetchOptions): Promise<Result<LikedSongsResult, AppError>>;
+  fetchHistory(options?: LibraryFetchOptions): Promise<Result<HistoryResult, AppError>>;
+  setLiked(videoId: string, status: LikeStatus): Promise<Result<OptimisticMutationResult, AppError>>;
+  addTrackToPlaylist(playlistId: string, videoId: string): Promise<Result<OptimisticMutationResult, AppError>>;
+  removeTrackToPlaylist(playlistId: string, videoId: string, setVideoId?: string): Promise<Result<OptimisticMutationResult, AppError>>;
+  removeTrackFromPlaylist(playlistId: string, videoId: string, setVideoId?: string): Promise<Result<OptimisticMutationResult, AppError>>;
+  drainMutationQueue(): Promise<Result<{ processed: number; remaining: number }, AppError>>;
 }
 
 export function createBackend(adapters: BackendAdapters = {}): Backend {
@@ -166,6 +184,13 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     authService: auth,
   });
 
+  const library = new LibraryService({
+    innertube,
+    authService: auth,
+    db: sqlDatabase,
+    cache,
+  });
+
   const repository = new MusicRepository({
     innertube,
     streamResolver: streaming,
@@ -182,6 +207,7 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     innertube,
     streaming,
     auth,
+    library,
     adapters: {
       httpClient,
       secureStore,
@@ -209,5 +235,13 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     validateSession: () => auth.validateSession(),
     logout: () => auth.logout(),
     isSignedIn: () => auth.isSignedIn(),
+    fetchUserPlaylists: (options) => library.fetchUserPlaylists(options),
+    fetchLikedSongs: (options) => library.fetchLikedSongs(options),
+    fetchHistory: (options) => library.fetchHistory(options),
+    setLiked: (videoId, status) => library.setLiked(videoId, status),
+    addTrackToPlaylist: (playlistId, videoId) => library.addTrackToPlaylist(playlistId, videoId),
+    removeTrackToPlaylist: (playlistId, videoId, setVideoId) => library.removeTrackToPlaylist(playlistId, videoId, setVideoId),
+    removeTrackFromPlaylist: (playlistId, videoId, setVideoId) => library.removeTrackFromPlaylist(playlistId, videoId, setVideoId),
+    drainMutationQueue: () => library.drainQueue(),
   };
 }

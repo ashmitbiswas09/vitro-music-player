@@ -11,7 +11,8 @@ export type CacheDataType =
   | 'artist'
   | 'playlist'
   | 'stream'
-  | 'suggest';
+  | 'suggest'
+  | 'library';
 
 export interface CachePolicy {
   /** Duration in ms that cached data is considered fresh (returned immediately without revalidation) */
@@ -57,6 +58,11 @@ export const DEFAULT_CACHE_POLICIES: Record<CacheDataType, CachePolicy> = {
     freshTtlMs: 5 * 60 * 1000, // 5 minutes default
     staleTtlMs: 10 * 60 * 1000, // 10 minutes default
     persistToSql: false,
+  },
+  library: {
+    freshTtlMs: 10 * 60 * 1000, // 10 minutes
+    staleTtlMs: 24 * 60 * 60 * 1000, // 24 hours
+    persistToSql: true,
   },
 };
 
@@ -163,11 +169,26 @@ export const CacheKeyBuilder = {
     }
     return `stream:${videoId}`;
   },
+  libraryPlaylists(scope: string, continuation?: string): string {
+    const cleanScope = scope.startsWith('user:') ? scope : `user:${scope}`;
+    const cont = continuation ? `:continuation:${continuation}` : '';
+    return `auth:${cleanScope}:library:playlists${cont}`;
+  },
+  libraryLikedSongs(scope: string, continuation?: string): string {
+    const cleanScope = scope.startsWith('user:') ? scope : `user:${scope}`;
+    const cont = continuation ? `:continuation:${continuation}` : '';
+    return `auth:${cleanScope}:library:liked_songs${cont}`;
+  },
+  libraryHistory(scope: string, continuation?: string): string {
+    const cleanScope = scope.startsWith('user:') ? scope : `user:${scope}`;
+    const cont = continuation ? `:continuation:${continuation}` : '';
+    return `auth:${cleanScope}:library:history${cont}`;
+  },
 };
 
 export const CacheEntrySchema = z.object({
   key: z.string().min(1),
-  dataType: z.enum(['home', 'search', 'album', 'artist', 'playlist', 'stream', 'suggest']),
+  dataType: z.enum(['home', 'search', 'album', 'artist', 'playlist', 'stream', 'suggest', 'library']),
   value: z.unknown(),
   scope: z.string().default('guest'),
   createdAt: z.number().nonnegative(),

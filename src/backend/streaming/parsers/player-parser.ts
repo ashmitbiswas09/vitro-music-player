@@ -277,12 +277,21 @@ export function parsePlayerResponse(
   );
 
   if (!selection) {
+    const cipherFormatsCount = allFormats.filter(
+      (f) => typeof f.cipher === 'string' || typeof f.signatureCipher === 'string',
+    ).length;
     return err(
       new StreamError(
-        `No direct playable audio streams found for videoId "${videoId}"`,
+        cipherFormatsCount > 0
+          ? `No direct playable audio streams found for videoId "${videoId}": ${cipherFormatsCount} formats are signature-cipher locked`
+          : `No direct playable audio streams found for videoId "${videoId}"`,
         videoId,
-        'NO_FORMATS',
-        { totalFormatsFound: allFormats.length },
+        cipherFormatsCount > 0 ? 'DECIPHER_FAILED' : 'NO_FORMATS',
+        {
+          totalFormatsFound: allFormats.length,
+          cipherFormatsCount,
+          hasCipher: cipherFormatsCount > 0,
+        },
       ),
     );
   }

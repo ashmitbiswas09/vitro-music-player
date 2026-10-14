@@ -15,3 +15,4 @@ export * from './parsers/artist-parser';
 export * from './parsers/playlist-parser';
 export * from './parsers/next-parser';
 export * from './parsers/continuation-parser';
+export * from './parsers/library-parser';

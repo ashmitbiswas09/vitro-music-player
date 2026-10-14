@@ -42,8 +42,8 @@ export interface AppConfig {
 export const DEFAULT_INNERTUBE_CONFIG: InnertubeClientConfig = {
   baseUrl: 'https://music.youtube.com/youtubei/v1',
   clientName: 'WEB_REMIX',
-  clientVersion: '1.20240101.01.00',
-  clientPlatform: 'WEB',
+  clientVersion: '1.20260101.01.00',
+  clientPlatform: 'DESKTOP',
   clientNameHeader: '67',
   origin: 'https://music.youtube.com',
   referer: 'https://music.youtube.com/',

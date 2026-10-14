@@ -19,6 +19,7 @@ import {
 import CookieManager from '@react-native-cookies/cookies';
 import { redactString } from '@/backend/core';
 import { CacheKeyBuilder } from '@/backend/cache';
+import { DefaultStreamResolver, AuthenticatedStreamStrategy } from '@/backend/streaming';
 import { LoginModal } from './LoginModal';
 
 export function DebugScreen() {
@@ -398,13 +399,13 @@ export function DebugScreen() {
     try {
       const isSignedIn = await backend.isSignedIn();
 
-      // Clear memory stream cache for both test tracks to ensure fresh network resolutions
-      await backend.invalidateStream('07FY850lwxA');
+      // Clear memory stream cache for test tracks to ensure fresh network resolutions
+      await backend.invalidateStream('VYOjWnS4cMY');
       await backend.invalidateStream('9RfVp-GhKfs');
 
-      // Test 1: Age-restricted track "07FY850lwxA" (This Is America)
+      // Test 1: Age-restricted track "VYOjWnS4cMY" (Childish Gambino - This Is America)
       const t1Start = Date.now();
-      const res1 = await backend.resolveStream('07FY850lwxA', { forceFresh: true });
+      const res1 = await backend.resolveStream('VYOjWnS4cMY', { forceFresh: true });
       const t1DurationMs = Date.now() - t1Start;
 
       let t1Strategy = 'unknown';
@@ -484,11 +485,57 @@ export function DebugScreen() {
           : res2.error.code;
       }
 
+      // Test 3: Direct Authenticated Strategy on "9RfVp-GhKfs" (bypassing visionos and android_vr)
+      const t3Start = Date.now();
+      const authStrategy =
+        (backend.streaming as DefaultStreamResolver).getAuthenticatedStrategy() ??
+        new AuthenticatedStreamStrategy(backend.adapters.httpClient, {
+          authService: backend.auth,
+        });
+
+      const res3 = await authStrategy.resolveStream('9RfVp-GhKfs', { forceFresh: true });
+      const t3DurationMs = Date.now() - t3Start;
+
+      let t3Strategy = authStrategy.name;
+      let t3Status = 'N/A';
+      let t3Codec = 'N/A';
+      let t3Bitrate = 'N/A';
+      let t3Playable = 'NO';
+      let t3Cipher = 'NO';
+      let t3Error: string | undefined;
+
+      if (res3.ok) {
+        t3Strategy = res3.value.strategyName;
+        t3Codec = res3.value.stream.codec;
+        t3Bitrate = `${(res3.value.stream.bitrate / 1000).toFixed(1)} kbps`;
+
+        const verify3 = await backend.streaming.verify(res3.value.stream.url, {
+          headers: res3.value.requestHeaders,
+        });
+        t3Status = `HTTP ${verify3.statusCode}`;
+        t3Playable = verify3.isPlayable ? 'YES' : 'NO';
+        t3Cipher = 'NO (Direct Audio Stream Available)';
+        if (!verify3.isPlayable) {
+          t3Error = verify3.error ?? 'Stream verification returned unplayable';
+        }
+      } else {
+        t3Error = `${res3.error.code}: ${res3.error.message}`;
+        t3Status = res3.error.details?.statusCode
+          ? `HTTP ${res3.error.details.statusCode}`
+          : res3.error.code;
+        const hasCipher = Boolean(res3.error.details?.hasCipher);
+        const cipherCount = (res3.error.details?.cipherFormatsCount as number) ?? 0;
+        const totalFormats = (res3.error.details?.totalFormatsFound as number) ?? 0;
+        t3Cipher = hasCipher
+          ? `YES (${cipherCount}/${totalFormats} formats signatureCipher locked)`
+          : 'NO (No cipher detected)';
+      }
+
       const lines = [
         '=== VERIFY AUTH RESOLUTION RESULTS ===',
         `Auth State: ${isSignedIn ? 'SIGNED IN' : 'GUEST (NOT SIGNED IN)'}`,
         '',
-        '--- TEST 1: Age-Restricted ("07FY850lwxA") ---',
+        '--- TEST 1: Age-Restricted ("VYOjWnS4cMY") ---',
         `Strategy: ${t1Strategy}`,
         `Status:   ${t1Status}`,
         `Codec:    ${t1Codec}`,
@@ -505,7 +552,127 @@ export function DebugScreen() {
         `Playable: ${t2Playable}`,
         `Time:     ${t2DurationMs}ms`,
         t2Error ? `Error:    ${t2Error}` : 'Error:    None',
+        '',
+        '--- TEST 3: Direct Authenticated ("9RfVp-GhKfs") ---',
+        `Strategy: ${t3Strategy}`,
+        `Status:   ${t3Status}`,
+        `Codec:    ${t3Codec}`,
+        `Bitrate:  ${t3Bitrate}`,
+        `Playable: ${t3Playable}`,
+        `Cipher:   ${t3Cipher}`,
+        `Time:     ${t3DurationMs}ms`,
+        t3Error ? `Error:    ${t3Error}` : 'Error:    None',
       ];
+
+      setOutput(lines.join('\n'));
+    } catch (caught) {
+      setOutput(
+        `[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const runLibraryTest = async () => {
+    setIsLoading(true);
+    setOutput('[DEV ONLY] Fetching User Library (Playlists, Liked Songs, History)...');
+    try {
+      const isSignedIn = await backend.isSignedIn();
+      if (!isSignedIn) {
+        setOutput(
+          '=== USER LIBRARY (PLAYLISTS & LIKES) ===\nStatus: NOT SIGNED IN\nPlease sign in via the WebView first.',
+        );
+        return;
+      }
+
+      // 1. Playlists
+      const pStart = Date.now();
+      const playlistsRes = await backend.fetchUserPlaylists();
+      const pDurationMs = Date.now() - pStart;
+
+      // 2. Liked Songs
+      const lStart = Date.now();
+      const likedRes = await backend.fetchLikedSongs();
+      const lDurationMs = Date.now() - lStart;
+
+      // 3. History
+      const hStart = Date.now();
+      const historyRes = await backend.fetchHistory();
+      const hDurationMs = Date.now() - hStart;
+
+      const lines = [
+        '=== USER LIBRARY (PLAYLISTS & LIKES) ===',
+        'Status: SIGNED IN',
+        '',
+        '--- 1. USER PLAYLISTS (FEmusic_liked_playlists) ---',
+      ];
+
+      if (playlistsRes.ok) {
+        const { playlists, continuationToken } = playlistsRes.value;
+        lines.push(`Total Playlists Found: ${playlists.length} (in ${pDurationMs}ms)`);
+        lines.push(`Has Continuation:      ${continuationToken ? 'YES' : 'NO'}`);
+        if (playlists.length > 0) {
+          lines.push('Top Playlists:');
+          for (let i = 0; i < Math.min(playlists.length, 5); i++) {
+            const p = playlists[i];
+            lines.push(
+              `  ${i + 1}. [${p.id}] "${p.title}" ${p.trackCount !== undefined ? `(${p.trackCount} songs)` : ''} ${p.author ? `by ${p.author}` : ''}`,
+            );
+          }
+        } else {
+          lines.push('  (No user playlists found in this account)');
+        }
+      } else {
+        lines.push(`Error: ${playlistsRes.error.code} - ${playlistsRes.error.message}`);
+      }
+
+      lines.push('');
+      lines.push('--- 2. LIKED SONGS (FEmusic_liked_videos) ---');
+      if (likedRes.ok) {
+        const { tracks, totalCount, continuationToken } = likedRes.value;
+        lines.push(`Liked Tracks Loaded:   ${tracks.length} (in ${lDurationMs}ms)`);
+        if (totalCount !== undefined) {
+          lines.push(`Total Count Header:    ${totalCount}`);
+        }
+        lines.push(`Has Continuation:      ${continuationToken ? 'YES' : 'NO'}`);
+        if (tracks.length > 0) {
+          lines.push('Top Liked Songs:');
+          for (let i = 0; i < Math.min(tracks.length, 5); i++) {
+            const t = tracks[i];
+            const artistNames = t.artists.map((a) => a.name).join(', ') || 'Unknown';
+            lines.push(
+              `  ${i + 1}. [${t.id}] "${t.title}" - ${artistNames} (${t.durationSeconds ? `${Math.floor(t.durationSeconds / 60)}:${String(t.durationSeconds % 60).padStart(2, '0')}` : 'N/A'})`,
+            );
+          }
+        } else {
+          lines.push('  (No liked tracks found in this account)');
+        }
+      } else {
+        lines.push(`Error: ${likedRes.error.code} - ${likedRes.error.message}`);
+      }
+
+      lines.push('');
+      lines.push('--- 3. PLAYBACK HISTORY (FEmusic_history) ---');
+      if (historyRes.ok) {
+        const { items, continuationToken } = historyRes.value;
+        lines.push(`History Items Loaded:  ${items.length} (in ${hDurationMs}ms)`);
+        lines.push(`Has Continuation:      ${continuationToken ? 'YES' : 'NO'}`);
+        if (items.length > 0) {
+          lines.push('Recent History:');
+          for (let i = 0; i < Math.min(items.length, 5); i++) {
+            const h = items[i];
+            const artistNames = h.track.artists.map((a) => a.name).join(', ') || 'Unknown';
+            lines.push(
+              `  ${i + 1}. [${h.track.id}] "${h.track.title}" - ${artistNames} ${h.playedAt ? `(${h.playedAt})` : ''}`,
+            );
+          }
+        } else {
+          lines.push('  (No playback history found)');
+        }
+      } else {
+        lines.push(`Error: ${historyRes.error.code} - ${historyRes.error.message}`);
+      }
 
       setOutput(lines.join('\n'));
     } catch (caught) {
@@ -575,6 +742,13 @@ export function DebugScreen() {
           onPress={runVerifyAuthResolution}
           disabled={isLoading}
           color="#e65100"
+        />
+        <View style={styles.spacer} />
+        <Button
+          title="LIBRARY (PLAYLISTS & LIKES)"
+          onPress={runLibraryTest}
+          disabled={isLoading}
+          color="#4a148c"
         />
       </View>
 

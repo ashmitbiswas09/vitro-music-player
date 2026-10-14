@@ -99,6 +99,10 @@ export class DefaultStreamResolver implements StreamResolver {
     }
   }
 
+  getAuthenticatedStrategy(): AuthenticatedStreamStrategy | undefined {
+    return this.authenticatedStrategy;
+  }
+
   private async throttle(): Promise<void> {
     const now = this.clock.now();
     const elapsed = now - this.lastRequestTime;

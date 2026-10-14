@@ -283,8 +283,9 @@ flowchart TD
 ### Authenticated Stream Fallback
 
 - When guest stream strategies fail with `recoverableWithAuth === true` (e.g. `LOGIN_REQUIRED` on age-restricted or premium tracks):
-- `DefaultStreamResolver` automatically falls back to `AuthenticatedStreamStrategy` if an auth session is active.
-- Uses `WEB_REMIX` client context combined with signed session headers.
+- `DefaultStreamResolver` automatically falls back to `AuthenticatedStreamStrategy` (`authenticated-visionos`) if an auth session is active.
+- Uses direct-URL `VISIONOS` client context (`clientName: VISIONOS`, `clientVersion: 1.02`, `clientPlatform: MOBILE`, `X-YouTube-Client-Name: 101`) combined with signed session headers (`Authorization: SAPISIDHASH ...`, `Cookie: ...`, `X-Origin: https://music.youtube.com`, `X-Goog-AuthUser: 0`).
+- Headers sent to the player RPC on `music.youtube.com` authenticate the request, while `requestHeaders` returned on `ResolvedStream` strictly omit `Cookie` and `Authorization` to prevent credential leakage to `*.googlevideo.com` CDN nodes.
 
 ### Full Logout Lifecycle
 
@@ -301,5 +302,64 @@ Invoking `authService.logout()` executes atomic cleanup across all tiers:
 2. **Logged Redaction**: HTTP client and error loggers automatically redact `Authorization`, `Cookie`, `X-Goog-Visitor-Id`, and `SAPISIDHASH`.
 3. **Recorded vs Sanitized Fixtures**: Any response recorded while authenticated is strictly confined to `fixtures/recorded/` (which is gitignored) and must **never** be checked into `fixtures/sanitized/`.
 4. **Whoami Anonymity**: The CLI `whoami` check reports only boolean sign-in status and anonymized deterministic account hashes (`account_<sha1_prefix>`), never cookies or personal user profiles.
+
+---
+
+## 9. Library Module Architecture
+
+### Overview
+
+The library module (`src/backend/library`) manages authenticated user data, playlists, liked tracks, listening history, and offline mutation queues with optimistic updates.
+
+```mermaid
+flowchart TD
+    UI[UI Layer / Backend Facade] --> LibService[LibraryService]
+    LibService --> AuthGate{Auth Check: Active Session?}
+    AuthGate -->|No| MissingSession[AuthError: MISSING_SESSION]
+    AuthGate -->|Yes| CacheCheck{Cache Check: auth:user:id:library:...}
+    
+    CacheCheck -->|Fresh Hit| ReturnData[Return Cached Data]
+    CacheCheck -->|Stale / Miss| InnertubeClient[InnertubeClient Browse]
+    InnertubeClient -->|RPC| YTM[music.youtube.com /browse]
+    YTM --> Parsers[Defensive Library Parsers]
+    Parsers --> CacheWrite[Write Cache (user-scoped)]
+    
+    UI -->|setLiked / addTrack| Mutate[Optimistic Mutation]
+    Mutate --> LocalOverlay[Update user_likes & Cache Optimistically]
+    Mutate --> Queue[Enqueue in pending_mutations (SqlDatabase)]
+    Mutate --> NetAttempt{Network Execution}
+    NetAttempt -->|Success| RemoveQueue[Remove from pending_mutations]
+    NetAttempt -->|Transient / Offline| KeepQueue[Preserve PENDING in Queue for Drain]
+    NetAttempt -->|Fatal 400 Rejection| Rollback[Roll Back user_likes & Cache]
+```
+
+### Defensive Read Operations
+
+All library endpoints use authenticated `WEB_REMIX` `/browse` requests and are parsed with defensive Zod schemas:
+- `fetchUserPlaylists(limit?, continuation?)`: browses `FEmusic_liked_playlists`. Parses `gridRenderer` and `musicTwoRowItemRenderer` elements into `UserPlaylist[]` models.
+- `fetchLikedSongs(limit?, continuation?)`: browses `FEmusic_liked_videos`. Parses `musicPlaylistShelfRenderer` and `musicResponsiveListItemRenderer` tracks into `Track[]`, automatically merging local optimistic like/unlike states.
+- `fetchHistory(limit?, continuation?)`: browses `FEmusic_history`. Parses `sectionListRenderer` shelves into `HistoryItem[]` models with `playedAt` groupings (e.g. "Today", "Yesterday").
+
+### Auth Gating & Cache Scoping
+
+- Every method checks `AuthService.getSession()` prior to network or cache interaction. Unauthenticated calls immediately reject with typed `AuthError(reason: 'MISSING_SESSION')`.
+- All cached library queries use auth-scoped keys:
+  - `auth:user:<accountId>:library:playlists`
+  - `auth:user:<accountId>:library:liked_songs`
+  - `auth:user:<accountId>:library:history`
+- When user logs out, `cache.clearUserScopedData()` purges all library entries from both L1 memory LRU and L2 SQLite.
+
+### Offline Mutation Queue (`MutationQueue`)
+
+The offline queue persists pending mutations in `SqlDatabase` across application restarts:
+- Table `pending_mutations`: stores `id`, `account_id`, `type`, `payload`, `created_at`, `retry_count`, `last_attempt_at`, `status`, and `error`.
+- Table `user_likes`: maintains local optimistic like state (`account_id`, `video_id`, `status: LIKE | DISLIKE | INDIFFERENT`, `updated_at`).
+- **Optimistic Application**:
+  - `setLiked`: updates `user_likes` immediately and adjusts cached liked songs before making the network RPC.
+  - `addTrackToPlaylist` & `removeTrackToPlaylist`: optimistically update playlist metadata and dispatch `/browse/edit_playlist`.
+- **FIFO Queue Draining**:
+  - `drainQueue()` iterates through pending mutations in chronological sequence.
+  - If a transient network error occurs, draining halts to preserve ordering until connectivity is restored.
+  - On fatal rejection (HTTP 4xx client errors), changes are rolled back to their prior state (`previousStatus`) and marked failed.
 
 

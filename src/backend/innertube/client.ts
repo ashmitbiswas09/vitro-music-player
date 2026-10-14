@@ -40,6 +40,14 @@ import { parseArtistResponse } from './parsers/artist-parser';
 import { parsePlaylistResponse } from './parsers/playlist-parser';
 import { parseNextResponse } from './parsers/next-parser';
 import { parseContinuationResponse } from './parsers/continuation-parser';
+import {
+  parseUserPlaylistsResponse,
+  parseLikedSongsResponse,
+  parseHistoryResponse,
+  type UserPlaylistsResponse,
+  type LikedSongsResponse,
+  type HistoryResponse,
+} from './parsers/library-parser';
 
 // Publicly verified parameter tokens for YouTube Music category filtering
 const SEARCH_FILTER_PARAMS: Record<SearchFilter, string | undefined> = {
@@ -113,6 +121,7 @@ export class InnertubeClient {
         ...headers,
         Cookie: options.authSession.cookieHeader,
         'X-Origin': this.config.origin,
+        'X-Goog-AuthUser': '0',
       };
     } else if (this.authService) {
       const authHeadersRes = await this.authService.getAuthHeaders(this.config.origin);
@@ -124,6 +133,7 @@ export class InnertubeClient {
         ...headers,
         Cookie: this.authSession.cookieHeader,
         'X-Origin': this.config.origin,
+        'X-Goog-AuthUser': '0',
       };
     }
 
@@ -337,5 +347,76 @@ export class InnertubeClient {
       return rawRes;
     }
     return parseContinuationResponse(rawRes.value);
+  }
+
+  // 9. Generic Browse
+  async getRawBrowse(
+    browseId: string,
+    options: EndpointOptions & { continuation?: string } = {},
+  ): Promise<Result<unknown, AppError>> {
+    this.logger.debug(`Fetching Browse: "${browseId}"`);
+    const body: Record<string, unknown> = options.continuation
+      ? { continuation: options.continuation }
+      : { browseId };
+    return this.postEndpoint('browse', body, options);
+  }
+
+  // 10. User Playlists
+  async getUserPlaylists(
+    options: EndpointOptions & { continuation?: string } = {},
+  ): Promise<Result<UserPlaylistsResponse, AppError>> {
+    const rawRes = await this.getRawBrowse('FEmusic_liked_playlists', options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseUserPlaylistsResponse(rawRes.value);
+  }
+
+  // 11. Liked Songs
+  async getLikedSongs(
+    options: EndpointOptions & { continuation?: string } = {},
+  ): Promise<Result<LikedSongsResponse, AppError>> {
+    const rawRes = await this.getRawBrowse('FEmusic_liked_videos', options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseLikedSongsResponse(rawRes.value);
+  }
+
+  // 12. History
+  async getHistory(
+    options: EndpointOptions & { continuation?: string } = {},
+  ): Promise<Result<HistoryResponse, AppError>> {
+    const rawRes = await this.getRawBrowse('FEmusic_history', options);
+    if (!rawRes.ok) {
+      return rawRes;
+    }
+    return parseHistoryResponse(rawRes.value);
+  }
+
+  // 13. Like / Dislike / Indifferent mutations
+  async like(videoId: string, options: EndpointOptions = {}): Promise<Result<unknown, AppError>> {
+    this.logger.debug(`Liking videoId: "${videoId}"`);
+    return this.postEndpoint('like/like', { target: { videoId } }, options);
+  }
+
+  async dislike(videoId: string, options: EndpointOptions = {}): Promise<Result<unknown, AppError>> {
+    this.logger.debug(`Disliking videoId: "${videoId}"`);
+    return this.postEndpoint('like/dislike', { target: { videoId } }, options);
+  }
+
+  async removelike(videoId: string, options: EndpointOptions = {}): Promise<Result<unknown, AppError>> {
+    this.logger.debug(`Removing like for videoId: "${videoId}"`);
+    return this.postEndpoint('like/removelike', { target: { videoId } }, options);
+  }
+
+  // 14. Playlist Edit
+  async editPlaylist(
+    playlistId: string,
+    actions: unknown[],
+    options: EndpointOptions = {},
+  ): Promise<Result<unknown, AppError>> {
+    this.logger.debug(`Editing playlist: "${playlistId}"`, { actionCount: actions.length });
+    return this.postEndpoint('browse/edit_playlist', { playlistId, actions }, options);
   }
 }

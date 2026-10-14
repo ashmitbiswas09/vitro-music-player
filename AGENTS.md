@@ -16,6 +16,10 @@ This is an Expo/React Native mobile application. Prioritize mobile-first pattern
   - Session storage in `SecureStore` must be chunked (<= 1500 bytes/chunk) to prevent Android 2048-byte `SharedPreferences` limits.
   - Request signing generates `SAPISIDHASH` through the `Sha1Port` abstraction (`expo-crypto` in RN, `node:crypto` in tests/CLI).
   - Logout must atomically clear stored session chunks, wipe native WebView cookie jars, reset `visitorData`, and purge user-scoped cache (`cache.clearUserScopedData()`).
+- **Library Architecture**:
+  - All library operations (`fetchUserPlaylists`, `fetchLikedSongs`, `fetchHistory`, `setLiked`, `addTrackToPlaylist`, `removeTrackToPlaylist`) enforce session authentication and throw/return `AuthError` (`MISSING_SESSION`) if signed out.
+  - Library queries are scoped under `auth:user:<accountId>:library:...` and purged atomically on logout.
+  - Offline mutation queue persists pending operations in `SqlDatabase` (`pending_mutations`, `user_likes`), supporting optimistic state, FIFO draining, and automatic rollback on fatal HTTP 400 rejection.
 - **Dependency Rules**:
   - Before adding ANY native or Expo package, ask the user first and justify it in one line.
   - Install only SDK-compatible packages with `npx expo install <package>`.

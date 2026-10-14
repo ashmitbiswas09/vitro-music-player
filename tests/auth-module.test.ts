@@ -329,6 +329,7 @@ describe('Phase 5: Auth Module', () => {
       expect(capturedHeaders.Authorization).toMatch(/^SAPISIDHASH/);
       expect(capturedHeaders.Cookie).toContain('SAPISID=innertube_sapisid');
       expect(capturedHeaders['X-Origin']).toBe('https://music.youtube.com');
+      expect(capturedHeaders['X-Goog-AuthUser']).toBe('0');
     });
 
     it('resetVisitorData clears in-memory and persistent visitorData', async () => {
@@ -467,7 +468,7 @@ describe('Phase 5: Auth Module', () => {
       const res = await resolver.resolve('age_restricted_18');
       expect(res.ok).toBe(true);
       if (res.ok) {
-        expect(res.value.strategyName).toBe('authenticated-webremix');
+        expect(res.value.strategyName).toBe('authenticated-visionos');
         expect(res.value.stream.codec).toBe('opus');
         expect(res.value.stream.bitrate).toBe(160000);
       }

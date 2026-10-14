@@ -27,7 +27,7 @@ export interface AuthenticatedStrategyConfig {
 }
 
 export class AuthenticatedStreamStrategy implements StreamStrategy {
-  readonly name = 'authenticated-webremix';
+  readonly name = 'authenticated-visionos';
   private readonly httpClient: HttpClient;
   private readonly authService: AuthService;
   private readonly preferredCodecs: AudioCodec[];
@@ -40,6 +40,13 @@ export class AuthenticatedStreamStrategy implements StreamStrategy {
     this.preferredCodecs = config.preferredCodecs ?? ['opus', 'aac', 'other'];
     this.clock = config.clock ?? new SystemClock();
     this.logger = config.logger ?? createLogger({ prefix: `StreamStrategy[${this.name}]` });
+  }
+
+  async resolveStream(
+    videoId: string,
+    options: ResolveOptions = {},
+  ): Promise<Result<ResolvedStream, StreamError>> {
+    return this.resolve(videoId, options);
   }
 
   async resolve(
@@ -62,12 +69,16 @@ export class AuthenticatedStreamStrategy implements StreamStrategy {
       );
     }
 
+    const userAgent =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-      'X-YouTube-Client-Name': '67', // WEB_REMIX
-      'X-YouTube-Client-Version': '1.20240101.01.00',
+      'User-Agent': userAgent,
+      'X-YouTube-Client-Name': '101',
+      'X-YouTube-Client-Version': '1.02',
+      'X-Origin': 'https://music.youtube.com',
+      'X-Goog-AuthUser': '0',
       ...authHeadersRes.value,
     };
 
@@ -78,9 +89,13 @@ export class AuthenticatedStreamStrategy implements StreamStrategy {
     const body: Record<string, unknown> = {
       context: {
         client: {
-          clientName: 'WEB_REMIX',
-          clientVersion: '1.20240101.01.00',
-          clientPlatform: 'DESKTOP',
+          clientName: 'VISIONOS',
+          clientVersion: '1.02',
+          clientPlatform: 'MOBILE',
+          deviceMake: 'Apple',
+          deviceModel: 'RealityDevice17,1',
+          osName: 'visionOS',
+          osVersion: '26.5.23O471',
           hl: 'en',
           gl: 'US',
           utcOffsetMinutes: 0,
@@ -136,9 +151,8 @@ export class AuthenticatedStreamStrategy implements StreamStrategy {
       videoDetails: parsed.value.videoDetails,
       rawFormat: parsed.value.rawFormat,
       requestHeaders: {
-        'User-Agent': headers['User-Agent'],
+        'User-Agent': userAgent,
         Accept: '*/*',
-        Cookie: authHeadersRes.value.Cookie,
       },
     });
   }
