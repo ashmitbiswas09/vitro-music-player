@@ -120,6 +120,62 @@ describe('Phase 6: Library Module', () => {
       expect(res.value.continuationToken).toBe('TOKEN_PLAYLIST_NEXT');
     });
 
+    it('preserves full 34-character playlist IDs when stripping the leading VL prefix', () => {
+      const full34CharId = 'PLMC9KNkIncKtPzgY-5rmhvj7fax8fdxoj';
+      expect(full34CharId.length).toBe(34);
+
+      const mockRaw = {
+        contents: {
+          singleColumnBrowseResultsRenderer: {
+            tabs: [
+              {
+                tabRenderer: {
+                  content: {
+                    sectionListRenderer: {
+                      contents: [
+                        {
+                          gridRenderer: {
+                            items: [
+                              {
+                                musicTwoRowItemRenderer: {
+                                  title: { runs: [{ text: 'Long ID Playlist' }] },
+                                  navigationEndpoint: {
+                                    browseEndpoint: { browseId: `VL${full34CharId}` },
+                                  },
+                                },
+                              },
+                              {
+                                musicTwoRowItemRenderer: {
+                                  title: { runs: [{ text: 'Watch Endpoint Playlist' }] },
+                                  navigationEndpoint: {
+                                    watchEndpoint: { playlistId: full34CharId },
+                                  },
+                                },
+                              },
+                            ],
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      };
+
+      const res = parseUserPlaylistsResponse(mockRaw);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.value.playlists).toHaveLength(2);
+      expect(res.value.playlists[0].id).toBe(full34CharId);
+      expect(res.value.playlists[0].id.length).toBe(34);
+      expect(res.value.playlists[1].id).toBe(full34CharId);
+      expect(res.value.playlists[1].id.length).toBe(34);
+    });
+
     it('parseLikedSongsResponse parses tracks, header count, and continuation', () => {
       const mockRaw = {
         header: {
@@ -609,6 +665,32 @@ describe('Phase 6: Library Module', () => {
       // Verify rollback to INDIFFERENT
       const rollbackStatus = await service.queue.getOptimisticLike(accountId, 'invalid_vid');
       expect(rollbackStatus.ok && rollbackStatus.value === 'INDIFFERENT').toBe(true);
+    });
+
+    it('logout purges user_likes and pending_mutations from SQLite', async () => {
+      const session = await authService.getSession();
+      const accountId = session.ok && session.value ? session.value.accountId : '';
+
+      // 1. Enqueue offline mutation and set optimistic like
+      httpClient.addHandler('POST:https://music.youtube.com/youtubei/v1/like/like', () => {
+        throw new NetworkError('Offline');
+      });
+      await service.setLiked('logout_trk', 'LIKE');
+
+      // Verify records exist in SQLite
+      const pendingBefore = await service.queue.getPending(accountId);
+      expect(pendingBefore.ok && pendingBefore.value.length === 1).toBe(true);
+      const likeBefore = await service.queue.getOptimisticLike(accountId, 'logout_trk');
+      expect(likeBefore.ok && likeBefore.value === 'LIKE').toBe(true);
+
+      // 2. Clear user library data (as wired in onLogout)
+      await service.clearUserData(accountId);
+
+      // 3. Verify SQLite tables are completely purged
+      const pendingAfter = await service.queue.getPending(accountId);
+      expect(pendingAfter.ok && pendingAfter.value.length === 0).toBe(true);
+      const likeAfter = await service.queue.getOptimisticLike(accountId, 'logout_trk');
+      expect(likeAfter.ok && likeAfter.value === null).toBe(true);
     });
   });
 });

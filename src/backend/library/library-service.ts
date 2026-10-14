@@ -517,4 +517,17 @@ export class LibraryService {
     }
     return false;
   }
+
+  /**
+   * Purges user library tables (pending mutations and optimistic likes) from SQLite.
+   * Called during logout to prevent data leaking across accounts.
+   */
+  async clearUserData(accountId?: string): Promise<void> {
+    if (accountId) {
+      await this.mutationQueue.clearForAccount(accountId);
+    } else {
+      await this.mutationQueue.clearAll();
+    }
+    this.logger.info('Cleared user library SQLite tables on logout', { accountId });
+  }
 }

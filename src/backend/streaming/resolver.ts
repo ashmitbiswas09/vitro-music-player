@@ -44,6 +44,7 @@ export class DefaultStreamResolver implements StreamResolver {
   private readonly cache = new Map<string, ResolvedStream>();
   private authService?: AuthService;
   private authenticatedStrategy?: AuthenticatedStreamStrategy;
+  private readonly enableAuthFallback: boolean;
   private lastRequestTime = 0;
 
   constructor(options: StreamResolverOptions) {
@@ -53,6 +54,7 @@ export class DefaultStreamResolver implements StreamResolver {
     this.preferredCodecs = options.preferredCodecs ?? ['opus', 'aac', 'other'];
     this.minRequestDelayMs = options.minRequestDelayMs ?? 300;
     this.authService = options.authService;
+    this.enableAuthFallback = options.enableAuthFallback ?? false;
     if (options.authService) {
       this.authenticatedStrategy = new AuthenticatedStreamStrategy(this.httpClient, {
         authService: options.authService,
@@ -101,6 +103,14 @@ export class DefaultStreamResolver implements StreamResolver {
 
   getAuthenticatedStrategy(): AuthenticatedStreamStrategy | undefined {
     return this.authenticatedStrategy;
+  }
+
+  invalidate(videoId: string): void {
+    this.cache.delete(videoId);
+  }
+
+  invalidateStream(videoId: string): void {
+    this.invalidate(videoId);
   }
 
   private async throttle(): Promise<void> {
@@ -173,8 +183,9 @@ export class DefaultStreamResolver implements StreamResolver {
       });
     }
 
-    // 3. Fallback to authenticated strategy if an active signed-in session is present
-    if (this.authenticatedStrategy && this.authService) {
+    // 3. Fallback to authenticated strategy only if explicitly enabled (disabled by default because
+    // empirical testing showed native contexts reject web SAPISIDHASH cookies with HTTP 400 and WEB_REMIX returns UNPLAYABLE)
+    if (this.enableAuthFallback && this.authenticatedStrategy && this.authService) {
       const signedIn = await this.authService.isSignedIn();
       if (signedIn) {
         this.logger.info(

@@ -59,6 +59,11 @@ import {
   type LikeStatus,
   type OptimisticMutationResult,
 } from '@/backend/library';
+import {
+  PlaybackService,
+  FakeAudioEngine,
+  type AudioEngine,
+} from '@/backend/playback-core';
 import type { Result, AppError, StreamError, AuthError, Clock } from '@/backend/core';
 import { MusicRepository } from './music-repository';
 
@@ -74,6 +79,7 @@ export interface BackendAdapters {
   sha1?: Sha1Port;
   clock?: Clock;
   cookieJarClearer?: CookieJarClearer;
+  audioEngine?: AudioEngine;
 }
 
 export interface Backend {
@@ -84,6 +90,7 @@ export interface Backend {
   readonly streaming: StreamResolver;
   readonly auth: AuthService;
   readonly library: LibraryService;
+  readonly playback: PlaybackService;
   readonly adapters: {
     readonly httpClient: HttpClient;
     readonly secureStore: SecureStore;
@@ -91,6 +98,7 @@ export interface Backend {
     readonly sqlDatabase: SqlDatabase;
     readonly fileStore: FileStore;
     readonly sha1: Sha1Port;
+    readonly audioEngine: AudioEngine;
   };
   search(
     query: string,
@@ -164,6 +172,8 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     keyValueStore,
   });
 
+  let libraryInstance: LibraryService | undefined;
+
   const auth = new AuthService({
     secureStore,
     sha1,
@@ -173,6 +183,9 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     onLogout: async () => {
       await cache.clearUserScopedData();
       await innertube.resetVisitorData();
+      if (libraryInstance) {
+        await libraryInstance.clearUserData();
+      }
     },
   });
 
@@ -190,6 +203,7 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     db: sqlDatabase,
     cache,
   });
+  libraryInstance = library;
 
   const repository = new MusicRepository({
     innertube,
@@ -200,6 +214,16 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
 
   const prefetcher = new PrefetchPlanner(cache, streaming, clock);
 
+  const audioEngine = adapters.audioEngine ?? new FakeAudioEngine();
+  const playback = new PlaybackService({
+    audioEngine,
+    streamResolver: streaming,
+    innertube,
+    prefetchPlanner: prefetcher,
+    storage: keyValueStore,
+    clock,
+  });
+
   return {
     repository,
     cache,
@@ -208,6 +232,7 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     streaming,
     auth,
     library,
+    playback,
     adapters: {
       httpClient,
       secureStore,
@@ -215,6 +240,7 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
       sqlDatabase,
       fileStore,
       sha1,
+      audioEngine,
     },
     search: (query, options) => repository.search(query, options),
     resolveStream: (videoId, options) => repository.resolveStream(videoId, options),

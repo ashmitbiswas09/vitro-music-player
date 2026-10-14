@@ -4,24 +4,40 @@ Measured performance metrics on the Android emulator (Pixel 8 / API 35) using Re
 
 *Note: All numbers below are measured from the Android emulator environment and represent end-to-end operation timings.*
 
-## Current Baseline Metrics (Phases 1–6)
+## Current Baseline Metrics (Phases 1–7)
 
 | Operation | Metric / Duration | Data Source & Tier | Notes |
 |:---|:---|:---|:---|
 | **Search ("Radiohead", all)** | **~1.0 s** (~1000 ms) | Network | InnerTube search endpoint, JSON parse, Zod validation |
 | **Home Feed (Browse)** | **~0.44 s** (~440 ms) | Network | `FEmusic_home` browse feed with section parsing |
-| **Stream Resolve & Verify (VisionOS)** | **~379 ms** | Network | Player endpoint + HTTP 206 Range check on Opus 150.1 kbps stream |
-| **Stream Resolve & Verify (Full Chain)** | **~2.0 s** (~2000 ms) | Network | Strategy fallback chain + TTFB verification |
+| **Stream Resolve (VisionOS - Standard)** | **~182 ms** | Network | `9RfVp-GhKfs`: HTTP 206 Range check on Opus 150.1 kbps stream |
+| **Stream Resolve (VisionOS - Age-Restricted)** | **~971 ms** | Network | `VYOjWnS4cMY`: HTTP 206 Range check on Opus 150.3 kbps stream |
+| **Stream Resolve (Authenticated VisionOS)** | **HTTP 400** | Network | Native client context rejects web browser cookies; auto-fallback disabled |
+| **Library: Playlists (`FEmusic_liked_playlists`)** | **~408 ms** | Network | 2 playlists found (`[PLQcZqxkSRJW8]`, `[SE]`) |
+| **Library: Liked Songs (`FEmusic_liked_videos`)** | **~302 ms** | Network | Authenticated user liked tracks shelf parse |
+| **Library: History (`FEmusic_history`)** | **~350 ms** | Network | 1 item loaded (`[90DKXLbzLto] "The Night We Met"`) |
 | **Cache Hit (In-Memory)** | **~0–2 ms** | L1 Memory (LRU) | Stale-While-Revalidate memory lookup (sub-100 ms target easily met) |
 | **Cold Start from SQLite** | **~50 ms** | L2 SQLite (`expo-sqlite`) | Read parsed domain models from disk persistence after clearing memory tier / app restart |
 | **Mutation Queue Persistence** | **~1–4 ms** | SQLite (`pending_mutations`) | Local write/read for optimistic likes and playlist edits |
+| **Playback Queue State Operations** | **< 1 ms** | Memory | Headless state machine (next, prev, shuffle, repeat) |
+| **Playback State Cold-Start Restore** | **~1–2 ms** | Storage | Reconstitute queue and playback position from KeyValueStore |
 
 ## Evolution Across Phases
 
 - **Phase 4 (Cache)**: Established L1 in-memory LRU (< 2 ms) and L2 SQLite persistence (~50 ms cold start). Network roundtrips: search ~1.0 s, home ~0.44 s.
 - **Phase 4b (Cache Hardening)**: Stream URLs restricted to memory tier only (0 ms memory hit, 0 SQLite persistence). Verified parsed domain model storage.
-- **Phase 5 (Auth Module)**: Chunked SecureStore storage (<= 1500B chunks), SAPISID request hashing via `Sha1Port`, `authenticated-visionos` stream resolution fallback. Standard stream resolution on emulator: 379 ms (Opus 150.1 kbps).
-- **Phase 6 (Library Module)**: User playlists (`FEmusic_liked_playlists`), liked songs (`FEmusic_liked_videos`), and playback history (`FEmusic_history`). Offline optimistic mutation queue persisted in `SqlDatabase` with background drain and rollback on fatal HTTP 400 rejection.
+- **Phase 5 (Auth Module)**: Chunked SecureStore storage (<= 1500B chunks), SAPISID request hashing via `Sha1Port`.
+- **Phase 6 (Library Module & Stream Auth Verification)**:
+  - User playlists (`FEmusic_liked_playlists`): 408 ms (2 found). Full playlist IDs preserved across browse prefixes.
+  - Liked songs (`FEmusic_liked_videos`): 302 ms.
+  - Playback history (`FEmusic_history`): 350 ms.
+  - Stream empirical results: `visionos` resolves standard track in 182 ms (Opus 150.1 kbps) and age-restricted track in 971 ms (Opus 150.3 kbps). `authenticated-visionos` yields HTTP 400. Auto-fallback disabled by default. Offline mutation queue purged on logout.
+- **Phase 7 (Playback Core Module)**:
+  - Headless queue manager & audio engine contract.
+  - In-memory queue operations (< 1 ms). Stream prefetch ahead (1-2 tracks) eliminates latency between track transitions.
+  - Automatic HTTP 403 recovery with stream cache invalidation and single-retry re-resolution.
+  - Pre-playback stream expiry check (< 60s) guaranteeing valid playback URLs.
+  - Cold-start playback state restoration (~1-2 ms) from `KeyValueStore` without persisting IP-bound URLs.
 
 *This baseline is updated after each phase to track performance evolution and detect regressions.*
 

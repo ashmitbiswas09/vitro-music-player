@@ -17,9 +17,10 @@ import {
   RnSha1,
 } from '@/backend/platform/rn';
 import CookieManager from '@react-native-cookies/cookies';
-import { redactString } from '@/backend/core';
+import { redactString, type Track } from '@/backend/core';
 import { CacheKeyBuilder } from '@/backend/cache';
 import { DefaultStreamResolver, AuthenticatedStreamStrategy } from '@/backend/streaming';
+import { FakeAudioEngine } from '@/backend/playback-core';
 import { LoginModal } from './LoginModal';
 
 export function DebugScreen() {
@@ -684,6 +685,129 @@ export function DebugScreen() {
     }
   };
 
+  const runPlaybackCoreTest = async () => {
+    setIsLoading(true);
+    setOutput('[DEV ONLY] Running Playback Core Test (Fake Engine)...');
+    try {
+      const logs: string[] = ['=== PLAYBACK CORE STATE MACHINE TEST ===', ''];
+
+      // 1. Prepare 3 tracks from search/hardcoded fallback
+      logs.push('Fetching 3 test tracks...');
+      const searchRes = await backend.search('Radiohead');
+      let tracks: Track[] = [];
+      if (searchRes.ok) {
+        tracks = searchRes.value.items
+          .filter((item): item is { type: 'track'; track: Track } => item.type === 'track')
+          .map((item) => item.track)
+          .slice(0, 3);
+      }
+      if (tracks.length < 3) {
+        tracks = [
+          {
+            id: '9RfVp-GhKfs',
+            title: 'Creep',
+            artists: [{ name: 'Radiohead' }],
+            durationSeconds: 239,
+            thumbnails: [],
+          },
+          {
+            id: 'kJQP7kiw5Fk',
+            title: 'Despacito',
+            artists: [{ name: 'Luis Fonsi' }],
+            durationSeconds: 282,
+            thumbnails: [],
+          },
+          {
+            id: 'fJ9rUzIMcZQ',
+            title: 'Bohemian Rhapsody',
+            artists: [{ name: 'Queen' }],
+            durationSeconds: 359,
+            thumbnails: [],
+          },
+        ];
+      }
+      logs.push('Loaded 3 tracks:');
+      tracks.forEach((t: Track, i: number) => logs.push(`  ${i + 1}. [${t.id}] "${t.title}"`));
+      logs.push('');
+
+      const playback = backend.playback;
+      const fakeEngine = backend.adapters.audioEngine as FakeAudioEngine;
+
+      // Track state transitions
+      const stateLog: string[] = [];
+      const unsub = playback.onStatusChange((status) => {
+        stateLog.push(`-> State: ${status.state} (track: ${status.currentTrack?.id ?? 'none'})`);
+      });
+
+      // Step 1: setQueue & Auto-play
+      logs.push('--- STEP 1: setQueue & Auto-Play ---');
+      await playback.setQueue(tracks, 0);
+      logs.push(`Current State: ${playback.getStatus().state}`);
+      logs.push(
+        `Playing Track: [${playback.getStatus().currentTrack?.id}] "${playback.getStatus().currentTrack?.title}"`,
+      );
+      logs.push(`Loaded Audio URL: ${fakeEngine.loadedUrl?.slice(0, 50)}...`);
+      logs.push(`Request Headers attached: ${JSON.stringify(Object.keys(fakeEngine.loadedHeaders))}`);
+      logs.push('');
+
+      // Step 2: Prefetch Verification
+      logs.push('--- STEP 2: Prefetch Verification ---');
+      await new Promise((r) => setTimeout(r, 600));
+      const nextTrack = playback.queue.getNextTrack();
+      logs.push(`Next track in queue: [${nextTrack?.id}] "${nextTrack?.title}"`);
+      logs.push('');
+
+      // Step 3: next()
+      logs.push('--- STEP 3: next() ---');
+      await playback.next();
+      logs.push(`Current State: ${playback.getStatus().state}`);
+      logs.push(
+        `Playing Track: [${playback.getStatus().currentTrack?.id}] "${playback.getStatus().currentTrack?.title}"`,
+      );
+      logs.push(`Index: ${playback.getStatus().currentIndex} / ${playback.getStatus().queueLength}`);
+      logs.push('');
+
+      // Step 4: toggleShuffle()
+      logs.push('--- STEP 4: toggleShuffle() ---');
+      playback.toggleShuffle();
+      logs.push(`Shuffled: ${playback.getStatus().shuffle}`);
+      logs.push(
+        `Current Track after shuffle: [${playback.getStatus().currentTrack?.id}] at index ${playback.getStatus().currentIndex}`,
+      );
+      logs.push(`Queue IDs: ${playback.queue.queue.map((t) => t.id).join(', ')}`);
+      logs.push('');
+
+      // Step 5: Simulate HTTP 403 & Auto-Recovery
+      logs.push('--- STEP 5: Simulate HTTP 403 & Auto-Recovery ---');
+      const curId = playback.getStatus().currentTrack?.id;
+      logs.push(`Simulating CDN 403 on current track [${curId}]...`);
+      fakeEngine.simulateError({
+        message: 'HTTP 403 Forbidden',
+        statusCode: 403,
+        isNetworkOrAuthError: true,
+      });
+
+      // Allow recovery loop to process
+      await new Promise((r) => setTimeout(r, 800));
+      logs.push(`Post-403 Recovery State: ${playback.getStatus().state}`);
+      logs.push(`Current Track: [${playback.getStatus().currentTrack?.id}]`);
+      logs.push('');
+
+      // State Transitions Summary
+      logs.push('--- STATE TRANSITIONS RECORDED ---');
+      stateLog.slice(-10).forEach((t) => logs.push(`  ${t}`));
+
+      unsub();
+      setOutput(logs.join('\n'));
+    } catch (caught) {
+      setOutput(
+        `[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.header}>DEV ONLY - BACKEND DEBUG SCREEN</Text>
@@ -749,6 +873,15 @@ export function DebugScreen() {
           onPress={runLibraryTest}
           disabled={isLoading}
           color="#4a148c"
+        />
+      </View>
+
+      <View style={styles.buttonRow}>
+        <Button
+          title="TEST PLAYBACK CORE (FAKE ENGINE)"
+          onPress={runPlaybackCoreTest}
+          disabled={isLoading}
+          color="#00695c"
         />
       </View>
 

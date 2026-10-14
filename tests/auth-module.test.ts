@@ -463,6 +463,7 @@ describe('Phase 5: Auth Module', () => {
         httpClient,
         authService: auth,
         strategies: [fakeGuestStrategy],
+        enableAuthFallback: true,
       });
 
       const res = await resolver.resolve('age_restricted_18');
@@ -471,6 +472,47 @@ describe('Phase 5: Auth Module', () => {
         expect(res.value.strategyName).toBe('authenticated-visionos');
         expect(res.value.stream.codec).toBe('opus');
         expect(res.value.stream.bitrate).toBe(160000);
+      }
+    });
+
+    it('by default does NOT fall back to AuthenticatedStreamStrategy to prevent wasted network calls', async () => {
+      const httpClient = new MemoryHttpClient();
+      const secureStore = new MemorySecureStore();
+      const auth = new AuthService({ secureStore, sha1, httpClient });
+      await auth.setSessionFromCookies({
+        SAPISID: 'mock_sapisid_token',
+        SSID: 'mock_ssid',
+        HSID: 'mock_hsid',
+        SID: 'mock_sid',
+      });
+
+      const fakeGuestStrategy: StreamStrategy = {
+        name: 'guest-mock',
+        resolve: async (videoId: string) =>
+          err(
+            new StreamError(
+              'Sign in to confirm age',
+              videoId,
+              'LOGIN_REQUIRED',
+              undefined,
+              undefined,
+              true, // recoverableWithAuth
+            ),
+          ),
+      };
+
+      const resolver = new DefaultStreamResolver({
+        httpClient,
+        authService: auth,
+        strategies: [fakeGuestStrategy],
+        // enableAuthFallback defaults to false
+      });
+
+      const res = await resolver.resolve('age_restricted_18');
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.recoverableWithAuth).toBe(true);
+        expect(res.error.reason).toBe('ALL_STRATEGIES_FAILED');
       }
     });
 

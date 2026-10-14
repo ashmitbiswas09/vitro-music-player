@@ -53,6 +53,37 @@ export interface HistoryResponse {
 }
 
 /**
+ * Helper to extract playlist ID from browseEndpoint or watchEndpoint/watchPlaylistEndpoint.
+ */
+function extractPlaylistBrowseOrWatchId(obj: unknown): string | undefined {
+  if (!obj || typeof obj !== 'object') return undefined;
+  const record = obj as Record<string, unknown>;
+
+  if (record.browseEndpoint && typeof record.browseEndpoint === 'object') {
+    const be = record.browseEndpoint as { browseId?: unknown };
+    if (typeof be.browseId === 'string' && be.browseId.length > 0) {
+      return be.browseId;
+    }
+  }
+
+  const we = (record.watchEndpoint ?? record.watchPlaylistEndpoint) as { playlistId?: unknown } | undefined;
+  if (typeof we?.playlistId === 'string' && we.playlistId.length > 0) {
+    return we.playlistId;
+  }
+
+  if (record.navigationEndpoint) {
+    const found = extractPlaylistBrowseOrWatchId(record.navigationEndpoint);
+    if (found) return found;
+  }
+  if (record.onTap) {
+    const found = extractPlaylistBrowseOrWatchId(record.onTap);
+    if (found) return found;
+  }
+
+  return extractBrowseId(obj);
+}
+
+/**
  * Defensive parser for User Playlists (FEmusic_liked_playlists).
  */
 export function parseUserPlaylistsResponse(
@@ -143,9 +174,10 @@ export function parseUserPlaylistsResponse(
         if (twoRow) {
           const title = runsToText((twoRow.title as Record<string, unknown> | undefined)?.runs);
           const rawId =
-            extractBrowseId(twoRow.navigationEndpoint) ??
-            extractBrowseId(twoRow.onTap) ??
-            extractBrowseId(twoRow);
+            extractPlaylistBrowseOrWatchId(twoRow.navigationEndpoint) ??
+            extractPlaylistBrowseOrWatchId(twoRow.title) ??
+            extractPlaylistBrowseOrWatchId(twoRow.onTap) ??
+            extractPlaylistBrowseOrWatchId(twoRow);
 
           if (!title || !rawId) continue;
 
@@ -183,9 +215,10 @@ export function parseUserPlaylistsResponse(
             ?.musicResponsiveListItemFlexColumnRenderer as Record<string, unknown> | undefined;
           const title = runsToText((titleCol?.text as Record<string, unknown> | undefined)?.runs);
           const rawId =
-            extractBrowseId(respItem.navigationEndpoint) ??
-            extractBrowseId(respItem.onTap) ??
-            extractBrowseId(respItem);
+            extractPlaylistBrowseOrWatchId(respItem.navigationEndpoint) ??
+            extractPlaylistBrowseOrWatchId(titleCol) ??
+            extractPlaylistBrowseOrWatchId(respItem.onTap) ??
+            extractPlaylistBrowseOrWatchId(respItem);
 
           if (!title || !rawId) continue;
           const id = rawId.startsWith('VL') ? rawId.slice(2) : rawId;

@@ -280,12 +280,14 @@ flowchart TD
   - `X-Origin: https://music.youtube.com`
 - **Cache Scoping**: In `MusicRepository`, cache queries dynamically use scope `user:<accountId>` when signed in versus `guest` when anonymous. This guarantees that user and guest queries never collide or share cache keys.
 
-### Authenticated Stream Fallback
+### Authenticated Stream Findings & Auto-Fallback Policy
 
-- When guest stream strategies fail with `recoverableWithAuth === true` (e.g. `LOGIN_REQUIRED` on age-restricted or premium tracks):
-- `DefaultStreamResolver` automatically falls back to `AuthenticatedStreamStrategy` (`authenticated-visionos`) if an auth session is active.
-- Uses direct-URL `VISIONOS` client context (`clientName: VISIONOS`, `clientVersion: 1.02`, `clientPlatform: MOBILE`, `X-YouTube-Client-Name: 101`) combined with signed session headers (`Authorization: SAPISIDHASH ...`, `Cookie: ...`, `X-Origin: https://music.youtube.com`, `X-Goog-AuthUser: 0`).
-- Headers sent to the player RPC on `music.youtube.com` authenticate the request, while `requestHeaders` returned on `ResolvedStream` strictly omit `Cookie` and `Authorization` to prevent credential leakage to `*.googlevideo.com` CDN nodes.
+Empirical testing on real Android emulator runs revealed the following stream resolution behaviors:
+- **Guest Strategy Capability**: The unauthenticated `visionos` strategy successfully resolves both standard tracks (`"9RfVp-GhKfs"` in ~182ms, Opus 150.1 kbps, HTTP 206) and age-restricted / bot-checked tracks (`"VYOjWnS4cMY"` *This Is America* in ~971ms, Opus 150.3 kbps, HTTP 206).
+- **Authenticated Strategy Limitations**:
+  - `authenticated-visionos`: Returns `HTTP 400` from `/youtubei/v1/player` because YouTube's native Apple RealityDevice client context rejects web browser authentication cookies (`SAPISIDHASH` / `HSID` / `SSID`).
+  - `authenticated-webremix`: Returns `STREAM_ERROR: Video is not playable (UNPLAYABLE)` because desktop `WEB_REMIX` requires JavaScript signature timestamp ciphering (`s=` / `n=`) and Proof-of-Origin tokens (PoToken) which are not present in headless environments.
+- **Auto-Fallback Disabled**: Because authenticated strategies fail or return unplayable without ciphering, automatic fallback in `DefaultStreamResolver` is disabled by default (`enableAuthFallback: false`). This avoids wasting an extra network round-trip on failed tracks. Direct testing remains accessible via `DefaultStreamResolver.getAuthenticatedStrategy()`.
 
 ### Full Logout Lifecycle
 
@@ -295,6 +297,7 @@ Invoking `authService.logout()` executes atomic cleanup across all tiers:
 3. Invokes the native cookie jar clearer (`@react-native-cookies/cookies` `CookieManager.clearAll()`).
 4. Executes `cache.clearUserScopedData()`, wiping all SQLite and memory entries under `auth:user:*`.
 5. Executes `innertube.resetVisitorData()`, clearing the anonymous visitor token from memory and `KeyValueStore`.
+6. Executes `library.clearUserData()`, purging the `pending_mutations` and `user_likes` SQLite tables to prevent data leakage across accounts.
 
 ### Security & Privacy Enforcements
 
@@ -360,6 +363,96 @@ The offline queue persists pending mutations in `SqlDatabase` across application
 - **FIFO Queue Draining**:
   - `drainQueue()` iterates through pending mutations in chronological sequence.
   - If a transient network error occurs, draining halts to preserve ordering until connectivity is restored.
-  - On fatal rejection (HTTP 4xx client errors), changes are rolled back to their prior state (`previousStatus`) and marked failed.
+  - On fatal rejection (HTTP 400 client errors), changes are rolled back to their prior state (`previousStatus`) and marked failed.
+
+---
+
+## 10. Playback Core Module Architecture
+
+### Overview
+
+The playback core module (`src/backend/playback-core`) is a pure TypeScript, headless audio orchestrator and queue state machine with zero React Native dependencies. Native player engines (e.g., `react-native-track-player`) connect through the `AudioEngine` port interface.
+
+```mermaid
+flowchart TD
+    UI[UI Layer / App Controls] --> Service[PlaybackService]
+    Service --> QueueMgr[QueueManager (State Machine)]
+    QueueMgr -->|Current Track| Service
+    
+    Service --> StreamCheck{Stream Expired or < 60s?}
+    StreamCheck -->|Yes| Invalidate[resolver.invalidateStream]
+    StreamCheck -->|No| FetchStream[resolver.resolveStream]
+    Invalidate --> FetchStream
+    
+    FetchStream --> EngineLoad[AudioEngine.load url, requestHeaders, metadata]
+    EngineLoad --> EnginePlay[AudioEngine.play]
+    
+    Service --> Prefetch[PrefetchPlanner: Resolve Next 1-2 Tracks]
+    
+    Engine[AudioEngine Event: onError] --> Is403{HTTP 403 or Network Error?}
+    Is403 -->|Yes & Not Retried| Retry[Invalidate Stream -> Re-resolve -> Retry Playback]
+    Is403 -->|No or Already Retried| ErrorState[Transition to ERROR State]
+    
+    Engine[AudioEngine Event: onTrackEnded] --> NextTrack[QueueManager.next]
+    NextTrack -->|Queue Depleted & autoRadio| GetNext[innertube.getNext -> Extend Queue]
+    
+    Service --> StatePersist[Persist State to KeyValueStore (no stream URLs)]
+```
+
+### 1. `AudioEngine` Port Interface
+
+Platform-agnostic contract defined in `src/backend/playback-core/types.ts`:
+- **Methods**:
+  - `load(url: string, headers: Record<string, string>, metadata: AudioTrackMetadata): Promise<void>`: Loads an audio stream. Passes `stream.requestHeaders` (e.g., `User-Agent`, `Accept`) ensuring CDN authorization and bypass of bot blocks.
+  - `play(): Promise<void>`
+  - `pause(): Promise<void>`
+  - `seekTo(positionMs: number): Promise<void>`
+  - `setVolume(volume: number): Promise<void>` (0.0 to 1.0)
+  - `stop(): Promise<void>`
+  - `release(): Promise<void>`
+- **Event Subscriptions**:
+  - `onStateChange((state: AudioEngineState) => void): () => void`
+  - `onPositionChange((positionMs: number, durationMs: number) => void): () => void`
+  - `onTrackEnded(() => void): () => void`
+  - `onError((error: AudioEngineError) => void): () => void`
+- **Adapters**:
+  - `FakeAudioEngine`: In-memory implementation in `src/backend/playback-core/fake-audio-engine.ts` used for automated unit testing, CLI execution, and dev debugging without native audio devices.
+  - Native Audio Engine: `react-native-track-player` adapter implemented under `src/backend/platform/rn/` (Phase 8).
+
+### 2. State Machine & Queue Manager (`QueueManager`)
+
+- **States (`PlaybackCoreStatus`)**: `IDLE`, `LOADING`, `BUFFERING`, `PLAYING`, `PAUSED`, `ENDED`, `ERROR`.
+- **Queue Operations**:
+  - `setQueue(tracks, startIndex)`: Initialises the active queue and original queue order.
+  - `playNext(track)`: Inserts track immediately following the currently playing index.
+  - `addToQueue(track)`: Appends track to the tail of the queue.
+  - `removeFromQueue(index)`: Removes item at given index; maintains active playback if removing other indices.
+  - `moveInQueue(fromIndex, toIndex)`: Reorders tracks in queue.
+  - `clearQueue()`: Clears queue and resets to `IDLE`.
+  - `next()`: Advances to the next track. Respects `repeatMode: ONE` (replays same track) and `repeatMode: ALL` (loops to 0 upon reaching end).
+  - `previous()`: If playback position exceeds 3,000ms (3s threshold), restarts the current track. Otherwise, jumps to previous track.
+- **Repeat & Shuffle**:
+  - `repeatMode`: `OFF`, `ONE`, `ALL`.
+  - `shuffle`: When enabled, applies Fisher-Yates shuffle to remaining unplayed tracks while retaining original queue array (`originalQueue`). When disabled, restores exact original playlist ordering while keeping current track intact.
+
+### 3. Stream Expiry, Recovery & Prefetch
+
+- **Expiry Verification**: Prior to loading, `PlaybackService` inspects the cached stream expiration timestamp (`expiresAt`). If the URL expires within 60 seconds (or is already expired), it invalidates the stream cache and requests a fresh signed URL.
+- **HTTP 403 Network Recovery**: If the `AudioEngine` emits an error containing HTTP 403, 401, or network stream failure, `PlaybackService` automatically invalidates the cached stream for that `videoId`, re-resolves a fresh stream from `StreamResolver`, and retries playback once before propagating the error.
+- **Background Prefetching**: When a track starts loading or advancing, `PlaybackService` queries upcoming tracks (1-2 tracks ahead) and resolves their streams into the in-memory stream cache in the background.
+- **Queue Continuation (Auto-Radio)**: When playback reaches the end of the queue and `autoRadio` is enabled, `PlaybackService` calls `innertube.getNext(currentTrack.id)` to discover related tracks and appends them to the queue seamlessly.
+
+### 4. Cold-Start State Persistence
+
+- Playback state is persisted to `KeyValueStore` under key `playback:state`:
+  - `queue`: `Track[]`
+  - `originalQueue`: `Track[]`
+  - `currentIndex`: `number`
+  - `positionMs`: `number`
+  - `repeatMode`: `PlaybackRepeatMode`
+  - `shuffle`: `boolean`
+  - `isAutoRadio`: `boolean`
+- **Security Rule**: Stream URLs are IP-bound and transient; they are **never included** in persistent storage. On cold start, `restorePersistedState()` reconstitutes the queue and settings, while streams are freshly resolved on demand.
+
 
 

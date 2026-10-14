@@ -18,8 +18,16 @@ This is an Expo/React Native mobile application. Prioritize mobile-first pattern
   - Logout must atomically clear stored session chunks, wipe native WebView cookie jars, reset `visitorData`, and purge user-scoped cache (`cache.clearUserScopedData()`).
 - **Library Architecture**:
   - All library operations (`fetchUserPlaylists`, `fetchLikedSongs`, `fetchHistory`, `setLiked`, `addTrackToPlaylist`, `removeTrackToPlaylist`) enforce session authentication and throw/return `AuthError` (`MISSING_SESSION`) if signed out.
-  - Library queries are scoped under `auth:user:<accountId>:library:...` and purged atomically on logout.
+  - Library queries are scoped under `auth:user:<accountId>:library:...` and purged atomically on logout along with SQLite mutation queue (`pending_mutations`, `user_likes`).
   - Offline mutation queue persists pending operations in `SqlDatabase` (`pending_mutations`, `user_likes`), supporting optimistic state, FIFO draining, and automatic rollback on fatal HTTP 400 rejection.
+- **Playback Core Architecture**:
+  - `AudioEngine` is a platform port interface (`load`, `play`, `pause`, `seekTo`, `setVolume`, `stop`, state/position/end/error events). Native audio engines connect via adapter; `FakeAudioEngine` is used in tests and CLI.
+  - `load()` passes `stream.requestHeaders` (e.g. `User-Agent`, `Accept`) ensuring CDN streams are authorized.
+  - Stream expiry check (< 60s) automatically invalidates and re-resolves fresh URLs before playback.
+  - Audio errors with HTTP 403 / network failure automatically trigger single-attempt re-resolution and playback retry before failing to `ERROR`.
+  - Background prefetching pre-resolves the next 1-2 upcoming tracks into stream cache on track load.
+  - Queue continuation (`innertube.getNext`) extends the queue automatically when reaching the end if `autoRadio` is enabled.
+  - Playback state (queue, originalQueue, index, position, repeat/shuffle) persists to storage for cold-start restoration without persisting IP-bound stream URLs.
 - **Dependency Rules**:
   - Before adding ANY native or Expo package, ask the user first and justify it in one line.
   - Install only SDK-compatible packages with `npx expo install <package>`.

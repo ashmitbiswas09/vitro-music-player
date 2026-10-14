@@ -238,4 +238,11 @@ export class MutationQueue {
     await this.db.execute(`DELETE FROM user_likes WHERE account_id = ?`, [accountId]);
     return ok(undefined);
   }
+
+  async clearAll(): Promise<Result<void, StorageError>> {
+    await this.init();
+    await this.db.execute(`DELETE FROM pending_mutations`);
+    await this.db.execute(`DELETE FROM user_likes`);
+    return ok(undefined);
+  }
 }

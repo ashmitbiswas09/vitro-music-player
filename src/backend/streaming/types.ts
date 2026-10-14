@@ -88,6 +88,12 @@ export interface StreamResolverOptions {
   minRequestDelayMs?: number;
   visitorDataManager?: VisitorDataManager;
   authService?: AuthService;
+  /**
+   * Whether to automatically fall back to AuthenticatedStreamStrategy when guest strategies fail.
+   * Defaults to false because empirical emulator tests proved authenticated-visionos returns HTTP 400
+   * (native context rejects web cookies) and authenticated-webremix is UNPLAYABLE without cipher/PoToken.
+   */
+  enableAuthFallback?: boolean;
 }
 
 export interface StreamResolver {
@@ -110,4 +116,5 @@ export interface StreamResolver {
       StreamError
     >
   >;
+  invalidateStream?(videoId: string): void;
 }
