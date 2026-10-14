@@ -169,12 +169,12 @@ export class DefaultStreamResolver implements StreamResolver {
       });
     }
 
-    // 3. Fallback to authenticated strategy if an active signed-in session is present and stream is recoverable with auth
-    if (hadRecoverableWithAuth && this.authenticatedStrategy && this.authService) {
+    // 3. Fallback to authenticated strategy if an active signed-in session is present
+    if (this.authenticatedStrategy && this.authService) {
       const signedIn = await this.authService.isSignedIn();
       if (signedIn) {
         this.logger.info(
-          `Attempting authenticated strategy fallback for "${videoId}" (recoverableWithAuth)`,
+          `Attempting authenticated strategy fallback for "${videoId}"`,
         );
         await this.throttle();
         const authRes = await this.authenticatedStrategy.resolve(videoId, resolveOpts);
@@ -458,11 +458,16 @@ export class DefaultStreamResolver implements StreamResolver {
     // Try resolving through strategies, verifying each candidate
     const attempts: { strategy: string; error: string }[] = [];
 
+    let hadRecoverableWithAuth = false;
+
     for (const strategy of this.strategies) {
       await this.throttle();
       const res = await strategy.resolve(videoId, resolveOpts);
 
       if (!res.ok) {
+        if (res.error.recoverableWithAuth) {
+          hadRecoverableWithAuth = true;
+        }
         attempts.push({ strategy: strategy.name, error: res.error.message });
         continue;
       }
@@ -511,12 +516,80 @@ export class DefaultStreamResolver implements StreamResolver {
       });
     }
 
+    // Fallback to authenticated strategy if an active signed-in session is present
+    if (this.authenticatedStrategy && this.authService) {
+      const signedIn = await this.authService.isSignedIn();
+      if (signedIn) {
+        this.logger.info(
+          `Attempting authenticated strategy fallback in resolveAndVerify for "${videoId}"`,
+        );
+        await this.throttle();
+        const res = await this.authenticatedStrategy.resolve(videoId, resolveOpts);
+
+        if (res.ok) {
+          const verification = await this.verify(res.value.stream.url, {
+            signal: options.signal,
+            headers: res.value.requestHeaders,
+          });
+
+          if (verification.isPlayable) {
+            let fullVerification: FullVerificationResult | undefined;
+            if (options.verifyFull) {
+              fullVerification = await this.verifyFull(res.value, {
+                signal: options.signal,
+              });
+
+              if (!fullVerification.isPlayable) {
+                this.logger.warn(
+                  `Full verification failed for strategy "${this.authenticatedStrategy.name}" on video "${videoId}": ${fullVerification.error}`,
+                );
+                this.cache.delete(videoId);
+                attempts.push({
+                  strategy: this.authenticatedStrategy.name,
+                  error: `Full verification failed: ${fullVerification.error ?? 'Unknown error'}`,
+                });
+                return err(
+                  new StreamError(
+                    `No working stream found for videoId "${videoId}" across all strategies`,
+                    videoId,
+                    'UNPLAYABLE',
+                    { attempts },
+                    undefined,
+                    hadRecoverableWithAuth,
+                  ),
+                );
+              }
+            }
+
+            this.cache.set(videoId, res.value);
+            return ok({
+              resolved: res.value,
+              verification,
+              fullVerification,
+            });
+          }
+
+          attempts.push({
+            strategy: this.authenticatedStrategy.name,
+            error: `Verification failed: HTTP ${verification.statusCode}`,
+          });
+        } else {
+          attempts.push({
+            strategy: this.authenticatedStrategy.name,
+            error: res.error.message,
+          });
+        }
+      }
+    }
+
     return err(
       new StreamError(
         `No working stream found for videoId "${videoId}" across all strategies`,
         videoId,
         'UNPLAYABLE',
         { attempts },
+        undefined,
+        hadRecoverableWithAuth,
       ),
     );
   }

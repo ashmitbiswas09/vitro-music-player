@@ -390,6 +390,133 @@ export function DebugScreen() {
     }
   };
 
+  const runVerifyAuthResolution = async () => {
+    setIsLoading(true);
+    setOutput(
+      '[DEV ONLY] Verifying Authenticated Stream Resolution...\nExecuting Test 1 (Age-Restricted) & Test 2 (Standard)...',
+    );
+    try {
+      const isSignedIn = await backend.isSignedIn();
+
+      // Clear memory stream cache for both test tracks to ensure fresh network resolutions
+      await backend.invalidateStream('07FY850lwxA');
+      await backend.invalidateStream('9RfVp-GhKfs');
+
+      // Test 1: Age-restricted track "07FY850lwxA" (This Is America)
+      const t1Start = Date.now();
+      const res1 = await backend.resolveStream('07FY850lwxA', { forceFresh: true });
+      const t1DurationMs = Date.now() - t1Start;
+
+      let t1Strategy = 'unknown';
+      let t1Status = 'N/A';
+      let t1Codec = 'N/A';
+      let t1Bitrate = 'N/A';
+      let t1Playable = 'NO';
+      let t1Error: string | undefined;
+
+      if (res1.ok) {
+        t1Strategy = res1.value.strategyName;
+        t1Codec = res1.value.stream.codec;
+        t1Bitrate = `${(res1.value.stream.bitrate / 1000).toFixed(1)} kbps`;
+
+        const verify1 = await backend.streaming.verify(res1.value.stream.url, {
+          headers: res1.value.requestHeaders,
+        });
+        t1Status = `HTTP ${verify1.statusCode}`;
+        t1Playable = verify1.isPlayable ? 'YES' : 'NO';
+        if (!verify1.isPlayable) {
+          t1Error = verify1.error ?? 'Stream verification returned unplayable';
+        }
+      } else {
+        const attempts = res1.error.details?.attempts as
+          | { strategy: string; error: string; reason?: string }[]
+          | undefined;
+        t1Error = `${res1.error.code}: ${res1.error.message}`;
+        if (attempts?.length) {
+          t1Error += `\nAttempts:\n${attempts.map((a) => ` - [${a.strategy}] ${a.error}`).join('\n')}`;
+          t1Strategy = attempts.map((a) => a.strategy).join(', ');
+        } else {
+          t1Strategy = (res1.error.details?.strategy as string) ?? 'none';
+        }
+        t1Status = res1.error.details?.statusCode
+          ? `HTTP ${res1.error.details.statusCode}`
+          : res1.error.code;
+      }
+
+      // Test 2: Standard track "9RfVp-GhKfs" (Radiohead - Creep)
+      const t2Start = Date.now();
+      const res2 = await backend.resolveStream('9RfVp-GhKfs', { forceFresh: true });
+      const t2DurationMs = Date.now() - t2Start;
+
+      let t2Strategy = 'unknown';
+      let t2Status = 'N/A';
+      let t2Codec = 'N/A';
+      let t2Bitrate = 'N/A';
+      let t2Playable = 'NO';
+      let t2Error: string | undefined;
+
+      if (res2.ok) {
+        t2Strategy = res2.value.strategyName;
+        t2Codec = res2.value.stream.codec;
+        t2Bitrate = `${(res2.value.stream.bitrate / 1000).toFixed(1)} kbps`;
+
+        const verify2 = await backend.streaming.verify(res2.value.stream.url, {
+          headers: res2.value.requestHeaders,
+        });
+        t2Status = `HTTP ${verify2.statusCode}`;
+        t2Playable = verify2.isPlayable ? 'YES' : 'NO';
+        if (!verify2.isPlayable) {
+          t2Error = verify2.error ?? 'Stream verification returned unplayable';
+        }
+      } else {
+        const attempts = res2.error.details?.attempts as
+          | { strategy: string; error: string; reason?: string }[]
+          | undefined;
+        t2Error = `${res2.error.code}: ${res2.error.message}`;
+        if (attempts?.length) {
+          t2Error += `\nAttempts:\n${attempts.map((a) => ` - [${a.strategy}] ${a.error}`).join('\n')}`;
+          t2Strategy = attempts.map((a) => a.strategy).join(', ');
+        } else {
+          t2Strategy = (res2.error.details?.strategy as string) ?? 'none';
+        }
+        t2Status = res2.error.details?.statusCode
+          ? `HTTP ${res2.error.details.statusCode}`
+          : res2.error.code;
+      }
+
+      const lines = [
+        '=== VERIFY AUTH RESOLUTION RESULTS ===',
+        `Auth State: ${isSignedIn ? 'SIGNED IN' : 'GUEST (NOT SIGNED IN)'}`,
+        '',
+        '--- TEST 1: Age-Restricted ("07FY850lwxA") ---',
+        `Strategy: ${t1Strategy}`,
+        `Status:   ${t1Status}`,
+        `Codec:    ${t1Codec}`,
+        `Bitrate:  ${t1Bitrate}`,
+        `Playable: ${t1Playable}`,
+        `Time:     ${t1DurationMs}ms`,
+        t1Error ? `Error:    ${t1Error}` : 'Error:    None',
+        '',
+        '--- TEST 2: Standard Track ("9RfVp-GhKfs") ---',
+        `Strategy: ${t2Strategy}`,
+        `Status:   ${t2Status}`,
+        `Codec:    ${t2Codec}`,
+        `Bitrate:  ${t2Bitrate}`,
+        `Playable: ${t2Playable}`,
+        `Time:     ${t2DurationMs}ms`,
+        t2Error ? `Error:    ${t2Error}` : 'Error:    None',
+      ];
+
+      setOutput(lines.join('\n'));
+    } catch (caught) {
+      setOutput(
+        `[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.header}>DEV ONLY - BACKEND DEBUG SCREEN</Text>
@@ -439,6 +566,15 @@ export function DebugScreen() {
           onPress={handleLogout}
           disabled={isLoading}
           color="#c62828"
+        />
+      </View>
+
+      <View style={styles.buttonRow}>
+        <Button
+          title="VERIFY AUTH RESOLUTION"
+          onPress={runVerifyAuthResolution}
+          disabled={isLoading}
+          color="#e65100"
         />
       </View>
 
