@@ -5,7 +5,7 @@
 
 import { File, Directory, Paths } from 'expo-file-system';
 import { ok, err, StorageError, type Result } from '@/backend/core';
-import type { FileStore, FileMetadata } from '../types';
+import type { FileStore, FileMetadata, DownloadFileResult } from '../types';
 
 export class RnFileStore implements FileStore {
   private resolveFile(path: string): File {
@@ -122,6 +122,34 @@ export class RnFileStore implements FileStore {
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       return err(new StorageError(`File metadata lookup failed: ${message}`, 'READ', path));
+    }
+  }
+
+  async downloadFile(
+    url: string,
+    destPath: string,
+    headers?: Record<string, string>,
+  ): Promise<Result<DownloadFileResult, StorageError>> {
+    try {
+      const file = this.resolveFile(destPath);
+      const parent = file.parentDirectory;
+      if (parent && !parent.exists) {
+        parent.create({ idempotent: true });
+      }
+
+      const downloaded = await File.downloadFileAsync(url, file, {
+        headers,
+        idempotent: true,
+      });
+
+      const info = downloaded.info();
+      return ok({
+        sizeBytes: info.size ?? 0,
+        uri: downloaded.uri,
+      });
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      return err(new StorageError(`File download failed: ${message}`, 'WRITE', destPath));
     }
   }
 }

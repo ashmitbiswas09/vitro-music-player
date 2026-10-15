@@ -21,6 +21,7 @@ import {
   handleCache,
   handleWhoami,
   handleLyrics,
+  handleDownload,
 } from './commands';
 
 const coldStartBegin = performance.now();
@@ -171,6 +172,12 @@ async function main(): Promise<void> {
     case 'lyrics': {
       const queryOrId = args.slice(1).join(' ').trim();
       timingDetails = await handleLyrics(queryOrId);
+      break;
+    }
+    case 'download': {
+      const actionOrId = args[1];
+      const targetId = args[2];
+      timingDetails = await handleDownload(actionOrId, targetId);
       break;
     }
     default:

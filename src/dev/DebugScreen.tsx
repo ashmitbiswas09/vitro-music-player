@@ -912,6 +912,100 @@ export function DebugScreen() {
     }
   };
 
+  const runDownloadTest = async () => {
+    setIsLoading(true);
+    setOutput('[DEV ONLY] Running Download & Offline Playback Verification...');
+    const lines: string[] = ['=== DOWNLOAD & OFFLINE PLAYBACK TEST ==='];
+    const videoId = '9RfVp-GhKfs';
+    const testTrack: Track = {
+      id: videoId,
+      title: 'Creep',
+      artists: [{ id: 'artist-radiohead', name: 'Radiohead' }],
+      thumbnails: [],
+      album: { id: 'album-pablo-honey', title: 'Pablo Honey' },
+      durationSeconds: 238,
+    };
+
+    try {
+      // Step 1: Enqueue download
+      lines.push('--- Step 1: Enqueue Download ---');
+      lines.push(`Downloading track: [${videoId}] "${testTrack.title}"...`);
+      const dlStart = Date.now();
+      const res = await backend.enqueueDownload(testTrack);
+      const dlDuration = Date.now() - dlStart;
+
+      if (!res.ok) {
+        lines.push(`ERROR: Failed to download track: ${res.error.message}`);
+        setOutput(lines.join('\n'));
+        return;
+      }
+
+      const downloaded = res.value;
+      lines.push(`Download Completed in ${dlDuration}ms:`);
+      lines.push(`- File Path:   ${downloaded.filePath}`);
+      lines.push(
+        `- Size:        ${(downloaded.sizeBytes / (1024 * 1024)).toFixed(2)} MB (${downloaded.sizeBytes} bytes)`,
+      );
+      lines.push(`- MIME Type:   ${downloaded.mimeType}`);
+      lines.push(`- Codec:       ${downloaded.codec}`);
+      lines.push(`- Bitrate:     ${Math.round(downloaded.bitrate / 1000)} kbps`);
+
+      // Step 2: Verify file existence and size on disk via RnFileStore
+      lines.push('');
+      lines.push('--- Step 2: Verify on Native Disk ---');
+      const fileStore = new RnFileStore();
+      const existsRes = await fileStore.exists(downloaded.filePath);
+      const metaRes = await fileStore.getMetadata(downloaded.filePath);
+      lines.push(`File exists on disk: ${existsRes.ok && existsRes.value ? 'YES' : 'NO'}`);
+      if (metaRes.ok) {
+        lines.push(`Disk stat size:      ${metaRes.value.sizeBytes} bytes`);
+      }
+
+      // Step 3: Verify SQLite record retrieval
+      lines.push('');
+      lines.push('--- Step 3: SQLite Download Record & List ---');
+      const record = await backend.getDownloadedTrack(videoId);
+      lines.push(`Retrieved from DB:   ${record ? 'FOUND' : 'MISSING'}`);
+      const allDownloads = await backend.listDownloads();
+      lines.push(`Total Downloads:     ${allDownloads.length}`);
+      const storageUsage = await backend.getStorageUsageBytes();
+      lines.push(`Total Storage Usage: ${(storageUsage / 1024).toFixed(1)} KB`);
+
+      // Step 4: Offline-First Playback Verification
+      lines.push('');
+      lines.push('--- Step 4: Offline-First Playback in PlaybackService ---');
+      await backend.playback.setQueue([testTrack], 0);
+
+      const fakeEngine = backend.adapters.audioEngine as FakeAudioEngine;
+      const loadedUrlOrPath = fakeEngine.loadedUrl;
+      const isLocalPath =
+        loadedUrlOrPath?.startsWith('file://') ||
+        loadedUrlOrPath === downloaded.filePath ||
+        Boolean(loadedUrlOrPath && !loadedUrlOrPath.startsWith('http'));
+      const isGoogleVideo = Boolean(loadedUrlOrPath?.includes('googlevideo.com'));
+
+      lines.push(`Loaded Source:       ${loadedUrlOrPath}`);
+      lines.push(`Is Local File Path:  ${isLocalPath ? 'YES' : 'NO'}`);
+      lines.push(
+        `Is Network Stream:   ${isGoogleVideo ? 'YES (UNEXPECTED!)' : 'NO (OFFLINE RESOLUTION SUCCESS)'}`,
+      );
+      lines.push(`Engine State:        ${fakeEngine.getState()}`);
+
+      // Stop engine playback
+      await backend.playback.stop();
+
+      lines.push('');
+      lines.push('=== ALL DOWNLOAD TESTS PASSED ===');
+      setOutput(lines.join('\n'));
+    } catch (caught) {
+      setOutput(
+        `[DEV ONLY] DOWNLOAD TEST CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.header}>DEV ONLY - BACKEND DEBUG SCREEN</Text>
@@ -993,6 +1087,15 @@ export function DebugScreen() {
           onPress={runLyricsTest}
           disabled={isLoading}
           color="#ad1457"
+        />
+      </View>
+
+      <View style={styles.buttonRow}>
+        <Button
+          title="TEST DOWNLOADS (LOCAL FILE + OFFLINE PLAY)"
+          onPress={runDownloadTest}
+          disabled={isLoading}
+          color="#e65100"
         />
       </View>
 

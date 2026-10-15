@@ -524,6 +524,94 @@ flowchart TD
 - **Negative Caching**: If LRCLIB returns no match or 404, an empty `LyricsResult` (`syncType: 'NONE'`) is stored with a **1-hour fresh TTL** (`freshTtlMs: 3,600,000`, `staleTtlMs: 7,200,000`, `persistToSql: true`). This prevents redundant network round-trips for tracks without lyrics during repeated playback.
 - **Bypass**: Passing `forceRefresh: true` bypasses cache and queries LRCLIB directly.
 
+---
+
+## 12. Downloads & Offline Architecture
+
+### Overview
+
+The downloads module (`src/backend/downloads`) provides offline-first track downloads, binary file streaming directly to disk, SQLite state persistence, and automatic offline-first stream resolution integration for `PlaybackService`.
+
+```mermaid
+flowchart TD
+    User[User / UI] --> Enqueue[DownloadManager.enqueueDownload]
+    Enqueue --> CheckDb{Already Downloaded & On Disk?}
+    CheckDb -->|Yes| ReturnExisting[Return DownloadedTrack]
+    CheckDb -->|No| InsertQueued[SQLite: Status = QUEUED]
+    
+    InsertQueued --> Resolve[StreamResolver.resolve]
+    Resolve --> DownloadStream[FileStore.downloadFile]
+    DownloadStream --> NativeDisk[(Native Disk / downloads/videoId.ext)]
+    
+    DownloadStream --> LyricsCache[LyricsService.getLyrics: Best Effort]
+    LyricsCache --> SQLiteL2[(SQLite Cache: lyrics:videoId)]
+    
+    DownloadStream --> CompleteDb[SQLite: Status = COMPLETED, Size, Path]
+    CompleteDb --> EmitEvent[Emit 'completed' Event]
+
+    subgraph Playback Offline Resolution
+        PlayTrack[PlaybackService.loadAndPlayCurrent] --> Lookup[DownloadLookup.getLocalTrackFilePath]
+        Lookup --> DiskCheck{Local File Exists?}
+        DiskCheck -->|Yes: 0ms| AudioEngineLoad[AudioEngine.load: local file:// path]
+        DiskCheck -->|No| NetworkStream[StreamResolver.resolve: Network Fetch]
+    end
+```
+
+### 1. Binary Stream Handling & `FileStore` Port
+
+- **Zero-Copy / Native Disk Streaming**:
+  - Audio streams are large binary files (3–10 MB, `audio/webm` Opus or `audio/mp4` AAC).
+  - Multi-megabyte binary payloads are never loaded into UTF-8 JavaScript strings or V8 memory heap.
+  - `FileStore` port defines `downloadFile(url, destPath, headers)`:
+    - **`RnFileStore`**: Uses Expo FileSystem (`File.downloadFileAsync(url, file, { headers, idempotent: true })`). The native thread streams HTTP response chunks straight to the filesystem without crossing the React Native bridge.
+    - **`NodeFileStore`**: Uses Node.js `fetch` + `stream.pipeline` / `fs.createWriteStream` in CLI environments, isolated via dynamic safe imports so React Native Metro never evaluates `node:fs`.
+    - **`MemoryFileStore`**: Simulates file downloads for deterministic unit testing.
+
+### 2. Domain Models & SQLite Persistence
+
+- **Models (`src/backend/downloads/types.ts`)**:
+  - `DownloadStatus`: `'QUEUED' | 'DOWNLOADING' | 'COMPLETED' | 'FAILED'`
+  - `DownloadedTrack`: `{ videoId: string; track: Track; filePath: string; sizeBytes: number; mimeType: string; codec: string; bitrate: number; downloadedAt: number }`
+- **SQLite Schema (`downloads` table)**:
+  - `video_id` (TEXT PRIMARY KEY)
+  - `track_json` (TEXT NOT NULL)
+  - `file_path` (TEXT NOT NULL)
+  - `size_bytes` (INTEGER NOT NULL)
+  - `mime_type` (TEXT NOT NULL)
+  - `codec` (TEXT NOT NULL)
+  - `bitrate` (INTEGER NOT NULL)
+  - `downloaded_at` (INTEGER NOT NULL)
+  - `status` (TEXT NOT NULL, indexed)
+  - `error` (TEXT)
+- Downloads survive app cold-starts and device reboots.
+
+### 3. Download Manager Orchestration (`DownloadManager`)
+
+- **Methods**:
+  - `enqueueDownload(track: Track)`: Resolves best audio stream, downloads file to `downloads/<videoId>.<ext>`, pre-caches lyrics via `LyricsService`, updates SQLite record, and emits lifecycle events.
+  - `getDownloadedTrack(videoId: string)`: Retrieves completed downloaded track metadata or returns `null`.
+  - `listDownloads()`: Lists all completed tracks ordered chronologically by `downloaded_at DESC`.
+  - `removeDownload(videoId: string)`: Deletes local binary audio file from disk via `FileStore.delete` and removes database row.
+  - `clearAllDownloads()`: Deletes all physical files in the download directory and clears SQLite table.
+  - `getStorageUsageBytes()`: Computes total storage bytes consumed by downloaded audio tracks.
+  - `onDownloadEvent(listener)`: Subscribes to lifecycle events (`enqueued`, `started`, `completed`, `failed`, `removed`).
+
+### 4. Offline-First Playback Integration (`PlaybackService`)
+
+- **Inverted Dependency Boundary**:
+  - To respect ESLint architectural boundaries (`playback-core` cannot import `downloads`), `PlaybackService` defines an optional `DownloadLookup` interface:
+    ```typescript
+    export interface DownloadLookup {
+      getLocalTrackFilePath(videoId: string): Promise<string | null>;
+    }
+    ```
+  - `services` wires `DownloadManager` into `PlaybackService` at application initialization.
+- **0ms Network Resolution**:
+  - Before calling `StreamResolver.resolve(track.id)` over the network, `PlaybackService` queries `downloadLookup.getLocalTrackFilePath(track.id)`.
+  - If a completed local file is present on disk, `PlaybackService` immediately feeds the local `file://` path into `AudioEngine.load(localPath, {}, metadata)`.
+  - Bypasses network resolution entirely (`0ms` latency), works completely offline in airplane mode. If loading fails, it automatically falls back to network stream resolution.
+
+
 
 
 

@@ -73,6 +73,11 @@ export interface FileMetadata {
   uri: string;
 }
 
+export interface DownloadFileResult {
+  sizeBytes: number;
+  uri: string;
+}
+
 export interface FileStore {
   read(path: string): Promise<Result<Uint8Array, StorageError>>;
   readText(path: string): Promise<Result<string, StorageError>>;
@@ -81,6 +86,11 @@ export interface FileStore {
   exists(path: string): Promise<Result<boolean, StorageError>>;
   makeDir(path: string): Promise<Result<void, StorageError>>;
   getMetadata(path: string): Promise<Result<FileMetadata, StorageError>>;
+  downloadFile(
+    url: string,
+    destPath: string,
+    headers?: Record<string, string>,
+  ): Promise<Result<DownloadFileResult, StorageError>>;
 }
 
 export interface Sha1Port {

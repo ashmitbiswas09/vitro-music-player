@@ -57,12 +57,14 @@ export class MemorySqlDatabase implements SqlDatabase {
         }
       }
 
-      // Check if primary key (key or id) exists in table to replace
+      // Check if primary key (key, id, or video_id) exists in table to replace
       const pkName = columnNames.includes('key')
         ? 'key'
         : columnNames.includes('id')
           ? 'id'
-          : undefined;
+          : columnNames.includes('video_id')
+            ? 'video_id'
+            : undefined;
       if (pkName && newRow[pkName] !== undefined) {
         const existingIdx = table.findIndex((r) => r[pkName] === newRow[pkName]);
         if (existingIdx !== -1) {
@@ -102,7 +104,7 @@ export class MemorySqlDatabase implements SqlDatabase {
     }
 
     // UPDATE simulation: UPDATE tableName SET col1 = ?, col2 = ? [WHERE ...]
-    const updateMatch = sql.match(/update\s+([a-zA-Z0-9_]+)\s+set\s+(.+?)(?:\s+where\s+(.+))?$/i);
+    const updateMatch = sql.match(/update\s+([a-zA-Z0-9_]+)\s+set\s+(.+?)(?:\s+where\s+(.+))?$/is);
     if (updateMatch) {
       const tableName = updateMatch[1];
       const setClause = updateMatch[2];
@@ -168,9 +170,26 @@ export class MemorySqlDatabase implements SqlDatabase {
       return ok([{ count: matching.length }] as unknown as T[]);
     }
 
+    // SELECT SUM(col) as alias FROM tableName [WHERE ...]
+    const sumMatch = sql.match(
+      /select\s+sum\(([a-zA-Z0-9_]+)\)\s+(?:as\s+([a-zA-Z0-9_]+)\s+)?from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+?))?$/is,
+    );
+    if (sumMatch) {
+      const colName = sumMatch[1];
+      const alias = sumMatch[2] ?? 'total';
+      const tableName = sumMatch[3];
+      const whereClause = sumMatch[4];
+      const table = this.tables.get(tableName) ?? [];
+      const matching = whereClause
+        ? table.filter((row) => this.evaluateWhere(row, whereClause, params))
+        : table;
+      const total = matching.reduce((acc, row) => acc + (Number(row[colName]) || 0), 0);
+      return ok([{ [alias]: total }] as unknown as T[]);
+    }
+
     // SELECT ... FROM tableName [WHERE ...] [ORDER BY ...]
     const selectMatch = sql.match(
-      /select\s+.*?\s+from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+?))?(?:\s+order\s+by\s+(.+))?$/i,
+      /select\s+.*?\s+from\s+([a-zA-Z0-9_]+)(?:\s+where\s+(.+?))?(?:\s+order\s+by\s+(.+))?$/is,
     );
     if (selectMatch) {
       const tableName = selectMatch[1];

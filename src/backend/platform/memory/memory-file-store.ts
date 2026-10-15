@@ -3,7 +3,7 @@
  */
 
 import { ok, err, StorageError, type Result } from '@/backend/core';
-import type { FileStore, FileMetadata } from '../types';
+import type { FileStore, FileMetadata, DownloadFileResult } from '../types';
 
 interface StoredFile {
   data: Uint8Array;
@@ -15,7 +15,7 @@ export class MemoryFileStore implements FileStore {
   private readonly directories = new Set<string>();
 
   private normalize(path: string): string {
-    return path.replace(/\\/g, '/').replace(/^\/+/, '');
+    return path.replace(/^memory:\/\//, '').replace(/\\/g, '/').replace(/^\/+/, '');
   }
 
   async read(path: string): Promise<Result<Uint8Array, StorageError>> {
@@ -64,14 +64,42 @@ export class MemoryFileStore implements FileStore {
     return ok(undefined);
   }
 
+  private readonly simulatedSizes = new Map<string, number>();
+  private mockDownloadSize?: number;
+
+  setMockDownloadSize(sizeBytes?: number): void {
+    this.mockDownloadSize = sizeBytes;
+  }
+
+  async downloadFile(
+    url: string,
+    destPath: string,
+    _headers?: Record<string, string>,
+  ): Promise<Result<DownloadFileResult, StorageError>> {
+    const key = this.normalize(destPath);
+    const sizeBytes = this.mockDownloadSize ?? 3_670_016; // default ~3.5MB realistic audio stream
+    const buffer = new Uint8Array(256);
+    this.files.set(key, {
+      data: buffer,
+      modifiedAt: Date.now(),
+    });
+    this.simulatedSizes.set(key, sizeBytes);
+
+    return ok({
+      sizeBytes,
+      uri: `memory://${key}`,
+    });
+  }
+
   async getMetadata(path: string): Promise<Result<FileMetadata, StorageError>> {
     const key = this.normalize(path);
     const file = this.files.get(key);
     if (!file) {
       return err(new StorageError(`File not found: ${path}`, 'READ', path));
     }
+    const sizeBytes = this.simulatedSizes.get(key) ?? file.data.byteLength;
     return ok({
-      sizeBytes: file.data.byteLength,
+      sizeBytes,
       modifiedAt: file.modifiedAt,
       uri: `memory://${key}`,
     });
@@ -80,6 +108,7 @@ export class MemoryFileStore implements FileStore {
   clear(): void {
     this.files.clear();
     this.directories.clear();
+    this.simulatedSizes.clear();
   }
 
   fileCount(): number {

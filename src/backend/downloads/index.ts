@@ -4,3 +4,6 @@
  */
 
 export const DOWNLOADS_MODULE_NAME = 'downloads' as const;
+
+export * from './types';
+export * from './download-manager';

@@ -183,7 +183,7 @@ describe('Phase 8: Lyrics Module', () => {
 
     it('successfully fetches exact match via /api/get', async () => {
       httpClient.whenGet(
-        'https://lrclib.net/api/get?track_name=Creep&artist_name=Radiohead&duration=239',
+        'https://lrclib.net/api/get?track_name=Creep&artist_name=Radiohead&album_name=Pablo+Honey&duration=239',
         {
           id: 101,
           trackName: 'Creep',
@@ -200,6 +200,7 @@ describe('Phase 8: Lyrics Module', () => {
         videoId: '9RfVp-GhKfs',
         trackTitle: 'Creep',
         artistName: 'Radiohead',
+        albumName: 'Pablo Honey',
         durationSeconds: 239,
       });
 
@@ -325,7 +326,7 @@ describe('Phase 8: Lyrics Module', () => {
 
     it('handles instrumental tracks correctly', async () => {
       httpClient.whenGet(
-        'https://lrclib.net/api/get?track_name=Treefingers&artist_name=Radiohead&duration=222',
+        'https://lrclib.net/api/get?track_name=Treefingers&artist_name=Radiohead&album_name=Kid+A&duration=222',
         {
           id: 103,
           trackName: 'Treefingers',
@@ -340,6 +341,7 @@ describe('Phase 8: Lyrics Module', () => {
         videoId: 'vid_tree',
         trackTitle: 'Treefingers',
         artistName: 'Radiohead',
+        albumName: 'Kid A',
         durationSeconds: 222,
       });
 
@@ -347,6 +349,114 @@ describe('Phase 8: Lyrics Module', () => {
       expect(result?.instrumental).toBe(true);
       expect(result?.syncType).toBe('NONE');
       expect(result?.syncedLines).toHaveLength(0);
+    });
+
+    it('skips /api/get and queries /api/search directly when albumName or durationSeconds is missing', async () => {
+      httpClient.whenGet(
+        'https://lrclib.net/api/search?q=Creep%20Radiohead',
+        [
+          {
+            id: 105,
+            trackName: 'Creep',
+            artistName: 'Radiohead',
+            duration: 239,
+            syncedLyrics: '[00:01.00]When you were here before',
+          },
+        ],
+        200,
+      );
+
+      // No albumName passed
+      const result = await provider.fetchLyrics({
+        videoId: '9RfVp-GhKfs',
+        trackTitle: 'Creep',
+        artistName: 'Radiohead',
+        durationSeconds: 239,
+      });
+
+      expect(result).not.toBeNull();
+      expect(result?.syncedLines[0].text).toBe('When you were here before');
+
+      // Assert that /api/get was never called!
+      const getCalls = httpClient.recordedRequests.filter((r) => r.url.includes('/api/get'));
+      expect(getCalls).toHaveLength(0);
+
+      const searchCalls = httpClient.recordedRequests.filter((r) => r.url.includes('/api/search'));
+      expect(searchCalls).toHaveLength(1);
+    });
+
+    it('penalizes unrequested version modifiers (acoustic, live, remix, instrumental) in search ranking', async () => {
+      httpClient.whenGet(
+        'https://lrclib.net/api/search?q=Creep%20Radiohead',
+        [
+          {
+            id: 1,
+            trackName: 'Creep (Acoustic)',
+            artistName: 'Radiohead',
+            duration: 239, // exact duration match, but has modifier!
+            syncedLyrics: '[00:01.00]Acoustic version line',
+          },
+          {
+            id: 2,
+            trackName: 'Creep',
+            artistName: 'Radiohead',
+            duration: 240, // 1s diff, but clean studio track!
+            syncedLyrics: '[00:01.00]Studio version line',
+          },
+          {
+            id: 3,
+            trackName: 'Creep (Live at Glastonbury)',
+            artistName: 'Radiohead',
+            duration: 239,
+            syncedLyrics: '[00:01.00]Live version line',
+          },
+        ],
+        200,
+      );
+
+      // Query does not request acoustic or live
+      const result = await provider.fetchLyrics({
+        videoId: '9RfVp-GhKfs',
+        trackTitle: 'Creep',
+        artistName: 'Radiohead',
+        durationSeconds: 239,
+      });
+
+      expect(result).not.toBeNull();
+      // Should pick studio track #2 over acoustic #1 or live #3
+      expect(result?.syncedLines[0].text).toBe('Studio version line');
+
+      // However, if the query explicitly asks for acoustic, acoustic should be selected:
+      httpClient.whenGet(
+        'https://lrclib.net/api/search?q=Creep%20Acoustic%20Radiohead',
+        [
+          {
+            id: 1,
+            trackName: 'Creep (Acoustic)',
+            artistName: 'Radiohead',
+            duration: 239,
+            syncedLyrics: '[00:01.00]Acoustic version line',
+          },
+          {
+            id: 2,
+            trackName: 'Creep',
+            artistName: 'Radiohead',
+            duration: 239,
+            syncedLyrics: '[00:01.00]Studio version line',
+          },
+        ],
+        200,
+      );
+
+      const acousticResult = await provider.fetchLyrics({
+        videoId: '4BX5xpB2DBM',
+        trackTitle: 'Creep Acoustic',
+        artistName: 'Radiohead',
+        durationSeconds: 239,
+      });
+
+      expect(acousticResult).not.toBeNull();
+      expect(acousticResult?.syncedLines[0].text).toBe('Acoustic version line');
     });
   });
 
@@ -371,7 +481,7 @@ describe('Phase 8: Lyrics Module', () => {
 
     it('caches successful synced lyrics with 7-day TTL across memory and SQLite', async () => {
       httpClient.whenGet(
-        'https://lrclib.net/api/get?track_name=Creep&artist_name=Radiohead&duration=239',
+        'https://lrclib.net/api/get?track_name=Creep&artist_name=Radiohead&album_name=Pablo+Honey&duration=239',
         {
           id: 201,
           trackName: 'Creep',
@@ -388,6 +498,7 @@ describe('Phase 8: Lyrics Module', () => {
         videoId: '9RfVp-GhKfs',
         trackTitle: 'Creep',
         artistName: 'Radiohead',
+        albumName: 'Pablo Honey',
         durationSeconds: 239,
       });
 
@@ -402,6 +513,7 @@ describe('Phase 8: Lyrics Module', () => {
         videoId: '9RfVp-GhKfs',
         trackTitle: 'Creep',
         artistName: 'Radiohead',
+        albumName: 'Pablo Honey',
         durationSeconds: 239,
       });
 
@@ -422,6 +534,7 @@ describe('Phase 8: Lyrics Module', () => {
         videoId: '9RfVp-GhKfs',
         trackTitle: 'Creep',
         artistName: 'Radiohead',
+        albumName: 'Pablo Honey',
         durationSeconds: 239,
       });
 
@@ -435,7 +548,7 @@ describe('Phase 8: Lyrics Module', () => {
     it('performs negative caching (1-hour TTL) when no lyrics are found', async () => {
       // Set 404 for track with no lyrics
       httpClient.whenGet(
-        'https://lrclib.net/api/get?track_name=Obscure+Song&artist_name=Unknown&duration=120',
+        'https://lrclib.net/api/get?track_name=Obscure+Song&artist_name=Unknown&album_name=Obscure+Album&duration=120',
         {},
         404,
       );
@@ -445,11 +558,12 @@ describe('Phase 8: Lyrics Module', () => {
         200,
       );
 
-      // First fetch: network lookup
+      // First fetch: network lookup with albumName -> calls get (404) then search (200), total 2 requests
       const res1 = await lyricsService.getLyrics({
         videoId: 'vid_obscure',
         trackTitle: 'Obscure Song',
         artistName: 'Unknown',
+        albumName: 'Obscure Album',
         durationSeconds: 120,
       });
 
@@ -464,6 +578,7 @@ describe('Phase 8: Lyrics Module', () => {
         videoId: 'vid_obscure',
         trackTitle: 'Obscure Song',
         artistName: 'Unknown',
+        albumName: 'Obscure Album',
         durationSeconds: 120,
       });
 
@@ -489,7 +604,7 @@ describe('Phase 8: Lyrics Module', () => {
 
     it('forceRefresh: true bypasses cache and re-fetches from provider', async () => {
       httpClient.whenGet(
-        'https://lrclib.net/api/get?track_name=Creep&artist_name=Radiohead&duration=239',
+        'https://lrclib.net/api/get?track_name=Creep&artist_name=Radiohead&album_name=Pablo+Honey&duration=239',
         {
           id: 201,
           trackName: 'Creep',
@@ -505,6 +620,7 @@ describe('Phase 8: Lyrics Module', () => {
         videoId: '9RfVp-GhKfs',
         trackTitle: 'Creep',
         artistName: 'Radiohead',
+        albumName: 'Pablo Honey',
         durationSeconds: 239,
       });
       expect(httpClient.recordedRequests).toHaveLength(1);
@@ -515,6 +631,7 @@ describe('Phase 8: Lyrics Module', () => {
           videoId: '9RfVp-GhKfs',
           trackTitle: 'Creep',
           artistName: 'Radiohead',
+          albumName: 'Pablo Honey',
           durationSeconds: 239,
         },
         { forceRefresh: true },

@@ -30,6 +30,7 @@ import type {
   PlaybackServiceOptions,
   PlaybackStatus,
   PersistedPlaybackState,
+  DownloadLookup,
 } from './types';
 
 const STORAGE_KEY_PLAYBACK_STATE = 'playback:state';
@@ -42,6 +43,7 @@ export class PlaybackService {
   private readonly storage?: KeyValueStore;
   private readonly clock: Clock;
   private readonly logger: Logger;
+  private readonly downloadLookup?: DownloadLookup;
 
   private readonly queueManager = new QueueManager();
   private state: PlaybackState = 'IDLE';
@@ -70,6 +72,7 @@ export class PlaybackService {
     this.clock = options.clock ?? new SystemClock();
     this.logger = options.logger ?? createLogger({ prefix: 'PlaybackService' });
     this.autoRadioEnabled = options.autoRadio ?? false;
+    this.downloadLookup = options.downloadLookup;
 
     this.setupAudioEngineListeners();
   }
@@ -305,6 +308,55 @@ export class PlaybackService {
     this.setState('LOADING');
     this.currentPositionMs = 0;
     this.currentDurationMs = (track.durationSeconds ?? 0) * 1000;
+
+    // 0. Check offline-first downloaded track
+    if (!forceFresh && this.downloadLookup) {
+      try {
+        const localPath = await this.downloadLookup.getLocalTrackFilePath(track.id);
+        if (requestId !== this.loadRequestId) return ok(undefined);
+
+        if (localPath) {
+          this.logger.info(
+            `Found local downloaded audio for track "${track.id}". Playing offline from disk: ${localPath}`,
+          );
+          const metadata: AudioTrackMetadata = {
+            id: track.id,
+            title: track.title,
+            artist: track.artists.map((a) => a.name).join(', ') || 'Unknown Artist',
+            album: track.album?.title,
+            durationSeconds: track.durationSeconds,
+            artworkUrl: track.thumbnails?.[0]?.url,
+          };
+
+          const loadRes = await this.audioEngine.load(localPath, {}, metadata);
+          if (requestId !== this.loadRequestId) return ok(undefined);
+
+          if (!loadRes.ok) {
+            this.logger.warn(
+              `Failed to load local offline track "${track.id}", falling back to network stream`,
+              { error: loadRes.error.message },
+            );
+          } else {
+            const playRes = await this.audioEngine.play();
+            if (requestId !== this.loadRequestId) return ok(undefined);
+
+            if (!playRes.ok) {
+              this.setState('ERROR');
+              return err(playRes.error);
+            }
+
+            this.setState('PLAYING');
+            this.triggerPrefetch();
+            return ok(undefined);
+          }
+        }
+      } catch (dlErr) {
+        this.logger.warn(
+          `Download lookup failed for "${track.id}", falling back to network stream`,
+          { error: String(dlErr) },
+        );
+      }
+    }
 
     // 1. Resolve stream URL
     this.logger.info(`Resolving audio stream for "${track.id}" (${track.title})...`);

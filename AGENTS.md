@@ -34,6 +34,12 @@ This is an Expo/React Native mobile application. Prioritize mobile-first pattern
   - LRC format parser handles standard/3-digit ms timestamps, multi-timestamps, metadata tags, and `[offset:+/-ms]`.
   - Active line resolution uses binary search (`getActiveLyricIndex`) returning current active lyric index at given `positionMs`.
   - Caches lyrics in `CacheManager` (L1 memory + L2 SQLite) with a 7-day TTL (`guest` scope) and negative caching (1-hour TTL) for tracks with no lyrics.
+- **Downloads & Offline Architecture**:
+  - `DownloadManager` handles binary audio stream downloading directly to sandboxed local disk without loading multi-megabyte streams into UTF-8 JS memory.
+  - Multi-platform `FileStore.downloadFile` adapter: `MemoryFileStore` for tests, `NodeFileStore` (via dynamic safe import) for CLI disk operations, and `RnFileStore` (`File.downloadFileAsync` from `expo-file-system`) for native zero-copy background disk streaming.
+  - SQLite persistence in `downloads` table tracks `videoId`, `track_json`, `file_path`, `size_bytes`, `mime_type`, `codec`, `bitrate`, `downloaded_at`, `status`.
+  - Offline-first playback integration: `PlaybackService` checks `DownloadLookup` before resolving streams across the network; completed downloads load local file paths directly into `AudioEngine` (`0ms` resolution latency, operates fully offline).
+  - Physical file deletion and database rows are atomically purged together on `removeDownload` and `clearAllDownloads`.
 - **Dependency Rules**:
   - Before adding ANY native or Expo package, ask the user first and justify it in one line.
   - Install only SDK-compatible packages with `npx expo install <package>`.

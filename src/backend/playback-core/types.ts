@@ -78,6 +78,10 @@ export interface PersistedPlaybackState {
   savedAt: number;
 }
 
+export interface DownloadLookup {
+  getLocalTrackFilePath(videoId: string): Promise<string | null>;
+}
+
 export interface PlaybackServiceOptions {
   audioEngine: AudioEngine;
   streamResolver: StreamResolver;
@@ -87,6 +91,7 @@ export interface PlaybackServiceOptions {
   clock?: Clock;
   logger?: Logger;
   autoRadio?: boolean;
+  downloadLookup?: DownloadLookup;
 }
 
 export interface PlaybackCoreStatus {

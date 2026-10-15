@@ -37,57 +37,65 @@ export class LrclibProvider {
     const { videoId, trackTitle, artistName, albumName, durationSeconds } = query;
     let exactHit429 = false;
 
-    // 1. Attempt exact match via /api/get
-    try {
-      const exactParams = new URLSearchParams({
-        track_name: trackTitle,
-        artist_name: artistName,
-      });
-      if (albumName) {
-        exactParams.set('album_name', albumName);
-      }
-      if (durationSeconds && durationSeconds > 0) {
-        exactParams.set('duration', Math.round(durationSeconds).toString());
-      }
+    // 1. Attempt exact match via /api/get only if all required params are present
+    const hasRequiredGetParams =
+      Boolean(trackTitle?.trim()) &&
+      Boolean(artistName?.trim()) &&
+      Boolean(albumName?.trim()) &&
+      Boolean(durationSeconds && durationSeconds > 0);
 
-      const getUrl = `${LRCLIB_BASE_URL}/get?${exactParams.toString()}`;
-      this.logger.debug(`Attempting exact LRCLIB match: ${getUrl}`);
+    if (hasRequiredGetParams) {
+      try {
+        const exactParams = new URLSearchParams({
+          track_name: trackTitle,
+          artist_name: artistName,
+          album_name: albumName!.trim(),
+          duration: Math.round(durationSeconds!).toString(),
+        });
 
-      const headers = {
-        'User-Agent': USER_AGENT,
-        'Lrclib-Client': USER_AGENT,
-        Accept: 'application/json',
-      };
+        const getUrl = `${LRCLIB_BASE_URL}/get?${exactParams.toString()}`;
+        this.logger.debug(`Attempting exact LRCLIB match: ${getUrl}`);
 
-      let res = await this.httpClient.get<LrclibRecord>(getUrl, { headers });
+        const headers = {
+          'User-Agent': USER_AGENT,
+          'Lrclib-Client': USER_AGENT,
+          Accept: 'application/json',
+        };
 
-      if (res.ok && res.value.status === 429) {
-        exactHit429 = true;
-        this.logger.warn('LRCLIB exact request rate limited (429). Waiting 1000ms...');
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        res = await this.httpClient.get<LrclibRecord>(getUrl, { headers });
-      }
+        let res = await this.httpClient.get<LrclibRecord>(getUrl, { headers });
 
-      if (res.ok && res.value.status === 200 && res.value.data) {
-        const record =
-          typeof res.value.data === 'string'
-            ? (JSON.parse(res.value.data) as LrclibRecord)
-            : res.value.data;
-        if (record && record.trackName) {
-          this.logger.info(`Exact LRCLIB match found for "${trackTitle}" by "${artistName}"`);
-          return this.mapToLyricsResult(record, videoId);
+        if (res.ok && res.value.status === 429) {
+          exactHit429 = true;
+          this.logger.warn('LRCLIB exact request rate limited (429). Waiting 1000ms...');
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          res = await this.httpClient.get<LrclibRecord>(getUrl, { headers });
         }
-      }
-    } catch (caught) {
-      this.logger.debug(`Exact match request failed: ${String(caught)}`);
-    }
 
-    // Small delay to prevent burst 429 between /api/get and /api/search
-    await new Promise((resolve) => setTimeout(resolve, 250));
+        if (res.ok && res.value.status === 200 && res.value.data) {
+          const record =
+            typeof res.value.data === 'string'
+              ? (JSON.parse(res.value.data) as LrclibRecord)
+              : res.value.data;
+          if (record && record.trackName) {
+            this.logger.info(`Exact LRCLIB match found for "${trackTitle}" by "${artistName}"`);
+            return this.mapToLyricsResult(record, videoId);
+          }
+        }
+      } catch (caught) {
+        this.logger.debug(`Exact match request failed: ${String(caught)}`);
+      }
+
+      // Small delay only after an actual /api/get attempt to prevent burst 429
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    } else {
+      this.logger.debug(
+        `Skipping /api/get for [${videoId}] "${trackTitle}" because albumName or durationSeconds is missing.`,
+      );
+    }
 
     // 2. Fallback to /api/search with cleaned title
     const cleanedTitle = cleanTrackTitle(trackTitle);
-    this.logger.info(`Exact match missed. Searching LRCLIB with cleaned title "${cleanedTitle}"...`);
+    this.logger.info(`Exact match missed or skipped. Searching LRCLIB with cleaned title "${cleanedTitle}"...`);
 
     try {
       const searchQuery = `${cleanedTitle} ${artistName}`.trim();
@@ -113,7 +121,7 @@ export class LrclibProvider {
             ? (JSON.parse(searchRes.value.data) as LrclibRecord[])
             : searchRes.value.data;
         if (Array.isArray(results) && results.length > 0) {
-          const match = this.pickBestSearchMatch(results, durationSeconds);
+          const match = this.pickBestSearchMatch(results, durationSeconds, trackTitle);
           if (match) {
             this.logger.info(
               `Matched LRCLIB search result: "${match.trackName}" by "${match.artistName}" (duration: ${match.duration}s)`,
@@ -146,12 +154,24 @@ export class LrclibProvider {
   private pickBestSearchMatch(
     records: LrclibRecord[],
     targetDuration?: number,
+    queryTrackTitle: string = '',
   ): LrclibRecord | null {
     if (records.length === 0) return null;
 
+    const MODIFIER_REGEX = /\b(acoustic|live|remix|instrumental)\b/i;
+    const queryHasModifier = MODIFIER_REGEX.test(queryTrackTitle);
+
+    const isPenalized = (r: LrclibRecord): boolean =>
+      !queryHasModifier && MODIFIER_REGEX.test(r.trackName);
+
     if (!targetDuration || targetDuration <= 0) {
-      // Pick first record with synced lyrics, or first record
-      return records.find((r) => Boolean(r.syncedLyrics)) ?? records[0];
+      const sorted = [...records].sort((a, b) => {
+        const penA = isPenalized(a) ? 1 : 0;
+        const penB = isPenalized(b) ? 1 : 0;
+        if (penA !== penB) return penA - penB;
+        return (b.syncedLyrics ? 1 : 0) - (a.syncedLyrics ? 1 : 0);
+      });
+      return sorted[0];
     }
 
     // Filter within +/- 5 seconds of target track duration
@@ -163,8 +183,13 @@ export class LrclibProvider {
       return null;
     }
 
-    // Sort by: 1) closest duration, 2) has syncedLyrics
+    // Sort by: 1) not penalized (studio version preferred), 2) closest duration, 3) has syncedLyrics
     candidates.sort((a, b) => {
+      const penA = isPenalized(a) ? 1 : 0;
+      const penB = isPenalized(b) ? 1 : 0;
+      if (penA !== penB) {
+        return penA - penB;
+      }
       const diffA = Math.abs((a.duration ?? 0) - targetDuration);
       const diffB = Math.abs((b.duration ?? 0) - targetDuration);
       if (diffA !== diffB) {

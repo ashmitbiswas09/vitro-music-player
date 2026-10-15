@@ -16,3 +16,4 @@ export * from './suggest';
 export * from './cache';
 export * from './whoami';
 export * from './lyrics';
+export * from './download';

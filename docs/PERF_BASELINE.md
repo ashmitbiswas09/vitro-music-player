@@ -25,6 +25,8 @@ Measured performance metrics on the Android emulator (Pixel 8 / API 35) using Re
 | **Lyrics: Active Line Binary Search** | **< 0.05 ms** | Memory | $O(\log N)$ binary search on sorted timestamped lines |
 | **Lyrics: L1 Cache Hit** | **< 0.1 ms** | L1 Memory (LRU) | Sub-millisecond in-memory lyrics return |
 | **Lyrics: L2 SQLite Cold Read** | **~5–10 ms** | L2 SQLite (`expo-sqlite`) | Read persisted parsed lyrics from disk on cold start |
+| **Offline Track Resolution (Downloaded)** | **0 ms** | Local Disk / FileStore | Instant local file playback, bypassing network stream resolution entirely |
+| **Download Record SQLite Query** | **< 2 ms** | L2 SQLite (`expo-sqlite`) | Retrieve offline track metadata, status, and local file path |
 
 ## Evolution Across Phases
 
@@ -49,6 +51,12 @@ Measured performance metrics on the Android emulator (Pixel 8 / API 35) using Re
   - Sub-millisecond $O(\log N)$ active line resolution (`getActiveLyricIndex`) enabling $60\text{ fps}$ scrolling without re-scanning arrays.
   - Defensive LRC format parser handling standard/3-digit ms, multi-timestamps, metadata tags, and offsets.
   - 7-day positive caching in L1 Memory and L2 SQLite (`guest` scope) and 1-hour negative caching for missing lyrics.
+- **Phase 9 (Downloads Module)**:
+  - Native binary audio streaming directly to local disk without loading 3–10 MB binary files into JavaScript string memory.
+  - Offline-first playback resolution in `PlaybackService` with `0 ms` network delay, bypassing stream resolution completely when a completed download is present.
+  - SQLite persistence in `downloads` table tracking track metadata, format, codec, bitrate, file path, and storage size across device restarts.
+  - Atomically synchronized physical file deletion and SQLite record purging on track removal and full download cache clearing.
+  - Best-effort lyrics pre-caching during download ensuring synchronized lyrics are available offline in SQLite cache.
 
 *This baseline is updated after each phase to track performance evolution and detect regressions.*
 

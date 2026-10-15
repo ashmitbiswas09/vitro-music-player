@@ -69,7 +69,11 @@ import {
   type LyricsResult,
   type LyricsSearchQuery,
 } from '@/backend/lyrics';
-import type { Result, AppError, StreamError, AuthError, Clock } from '@/backend/core';
+import {
+  DownloadManager,
+  type DownloadedTrack,
+} from '@/backend/downloads';
+import type { Result, AppError, StreamError, AuthError, Clock, Track } from '@/backend/core';
 import { MusicRepository } from './music-repository';
 
 export const SERVICES_MODULE_NAME = 'services' as const;
@@ -97,6 +101,7 @@ export interface Backend {
   readonly library: LibraryService;
   readonly playback: PlaybackService;
   readonly lyrics: LyricsService;
+  readonly downloads: DownloadManager;
   readonly adapters: {
     readonly httpClient: HttpClient;
     readonly secureStore: SecureStore;
@@ -158,6 +163,12 @@ export interface Backend {
   removeTrackFromPlaylist(playlistId: string, videoId: string, setVideoId?: string): Promise<Result<OptimisticMutationResult, AppError>>;
   drainMutationQueue(): Promise<Result<{ processed: number; remaining: number }, AppError>>;
   getLyrics(query: LyricsSearchQuery, options?: { forceRefresh?: boolean }): Promise<Result<LyricsResult, AppError>>;
+  enqueueDownload(track: Track): Promise<Result<DownloadedTrack, AppError>>;
+  getDownloadedTrack(videoId: string): Promise<DownloadedTrack | null>;
+  listDownloads(): Promise<DownloadedTrack[]>;
+  removeDownload(videoId: string): Promise<Result<void, AppError>>;
+  clearAllDownloads(): Promise<Result<void, AppError>>;
+  getStorageUsageBytes(): Promise<number>;
 }
 
 export function createBackend(adapters: BackendAdapters = {}): Backend {
@@ -221,6 +232,19 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
 
   const prefetcher = new PrefetchPlanner(cache, streaming, clock);
 
+  const lyrics = new LyricsService({
+    httpClient,
+    cacheManager: cache,
+    clock,
+  });
+
+  const downloads = new DownloadManager({
+    fileStore,
+    sqlDatabase,
+    streamResolver: streaming,
+    lyricsService: lyrics,
+  });
+
   const audioEngine = adapters.audioEngine ?? new FakeAudioEngine();
   const playback = new PlaybackService({
     audioEngine,
@@ -229,12 +253,12 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     prefetchPlanner: prefetcher,
     storage: keyValueStore,
     clock,
-  });
-
-  const lyrics = new LyricsService({
-    httpClient,
-    cacheManager: cache,
-    clock,
+    downloadLookup: {
+      getLocalTrackFilePath: async (videoId: string) => {
+        const dl = await downloads.getDownloadedTrack(videoId);
+        return dl ? dl.filePath : null;
+      },
+    },
   });
 
   return {
@@ -247,6 +271,7 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     library,
     playback,
     lyrics,
+    downloads,
     adapters: {
       httpClient,
       secureStore,
@@ -284,5 +309,11 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     removeTrackFromPlaylist: (playlistId, videoId, setVideoId) => library.removeTrackFromPlaylist(playlistId, videoId, setVideoId),
     drainMutationQueue: () => library.drainQueue(),
     getLyrics: (query, options) => lyrics.getLyrics(query, options),
+    enqueueDownload: (track) => downloads.enqueueDownload(track),
+    getDownloadedTrack: (videoId) => downloads.getDownloadedTrack(videoId),
+    listDownloads: () => downloads.listDownloads(),
+    removeDownload: (videoId) => downloads.removeDownload(videoId),
+    clearAllDownloads: () => downloads.clearAllDownloads(),
+    getStorageUsageBytes: () => downloads.getStorageUsageBytes(),
   };
 }

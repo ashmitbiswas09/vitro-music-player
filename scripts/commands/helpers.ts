@@ -46,6 +46,8 @@ Commands:
   whoami              Report current authentication status (never prints cookies or email).
   lyrics <videoId_or_query>
                       Fetch synchronized LRC or plain text lyrics from LRCLIB with 7-day caching.
+  download <videoId_or_query> | list | remove <videoId> | clear
+                      Download tracks for offline playback, inspect local storage usage, and manage downloads.
   help, --help, -h    Show this help menu
 
 Examples:
