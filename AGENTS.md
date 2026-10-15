@@ -40,6 +40,12 @@ This is an Expo/React Native mobile application. Prioritize mobile-first pattern
   - SQLite persistence in `downloads` table tracks `videoId`, `track_json`, `file_path`, `size_bytes`, `mime_type`, `codec`, `bitrate`, `downloaded_at`, `status`.
   - Offline-first playback integration: `PlaybackService` checks `DownloadLookup` before resolving streams across the network; completed downloads load local file paths directly into `AudioEngine` (`0ms` resolution latency, operates fully offline).
   - Physical file deletion and database rows are atomically purged together on `removeDownload` and `clearAllDownloads`.
+  - YouTube CDN downloads attach `Range: bytes=0-${contentLength - 1}` to bypass real-time playback pacing throttle (dropping 4MB download from 122s to ~2s).
+  - Stale `DOWNLOADING`/`QUEUED` downloads are recovered to `FAILED` on startup and partial disk files purged.
+- **Backend Facade & WarmUp Architecture**:
+  - `Backend` facade exposes a unified API via `createBackend()`, integrating `MusicRepository`, `InnertubeClient`, `StreamResolver`, `CacheManager`, `AuthService`, `LibraryService`, `PlaybackService`, `LyricsService`, and `DownloadManager`.
+  - `backend.warmUp()` initializes backing SQLite tables, restores auth session, visitorData, queue state, and reconciles interrupted downloads in parallel on app launch.
+  - `MusicRepository.search()` pre-resolves the #1 search track's audio stream in the background for instant (< 50ms) playback when tapped.
 - **Dependency Rules**:
   - Before adding ANY native or Expo package, ask the user first and justify it in one line.
   - Install only SDK-compatible packages with `npx expo install <package>`.

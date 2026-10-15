@@ -95,6 +95,14 @@ export class PlaybackService {
     };
   }
 
+  getState(): PlaybackStatus & { queue: Track[]; status: AudioEngineState } {
+    return {
+      ...this.getStatus(),
+      queue: this.queueManager.queue,
+      status: this.state,
+    };
+  }
+
   onStatusChange(cb: (status: PlaybackStatus) => void): () => void {
     this.statusListeners.add(cb);
     return () => this.statusListeners.delete(cb);

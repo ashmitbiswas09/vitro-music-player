@@ -8,6 +8,7 @@ import {
   type Clock,
   type Logger,
   type AudioCodec,
+  INNERTUBE_CLIENT_CONFIGS,
   SystemClock,
   createLogger,
   StreamError,
@@ -69,14 +70,13 @@ export class AuthenticatedStreamStrategy implements StreamStrategy {
       );
     }
 
-    const userAgent =
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+    const clientCfg = INNERTUBE_CLIENT_CONFIGS.VISIONOS;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'User-Agent': userAgent,
-      'X-YouTube-Client-Name': '101',
-      'X-YouTube-Client-Version': '1.02',
+      'User-Agent': clientCfg.userAgent,
+      'X-YouTube-Client-Name': clientCfg.clientNameHeader,
+      'X-YouTube-Client-Version': clientCfg.clientVersion,
       'X-Origin': 'https://music.youtube.com',
       'X-Goog-AuthUser': '0',
       ...authHeadersRes.value,
@@ -89,13 +89,10 @@ export class AuthenticatedStreamStrategy implements StreamStrategy {
     const body: Record<string, unknown> = {
       context: {
         client: {
-          clientName: 'VISIONOS',
-          clientVersion: '1.02',
-          clientPlatform: 'MOBILE',
-          deviceMake: 'Apple',
-          deviceModel: 'RealityDevice17,1',
-          osName: 'visionOS',
-          osVersion: '26.5.23O471',
+          clientName: clientCfg.clientName,
+          clientVersion: clientCfg.clientVersion,
+          clientPlatform: clientCfg.clientPlatform,
+          ...clientCfg.extraClientContext,
           hl: 'en',
           gl: 'US',
           utcOffsetMinutes: 0,
@@ -151,7 +148,7 @@ export class AuthenticatedStreamStrategy implements StreamStrategy {
       videoDetails: parsed.value.videoDetails,
       rawFormat: parsed.value.rawFormat,
       requestHeaders: {
-        'User-Agent': userAgent,
+        'User-Agent': clientCfg.userAgent,
         Accept: '*/*',
       },
     });

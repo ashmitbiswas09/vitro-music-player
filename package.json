@@ -42,5 +42,8 @@
     "cli": "tsx scripts/cli.ts",
     "postinstall": "patch-package"
   },
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "private": true
 }

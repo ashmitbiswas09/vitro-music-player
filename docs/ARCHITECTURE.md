@@ -611,6 +611,43 @@ flowchart TD
   - If a completed local file is present on disk, `PlaybackService` immediately feeds the local `file://` path into `AudioEngine.load(localPath, {}, metadata)`.
   - Bypasses network resolution entirely (`0ms` latency), works completely offline in airplane mode. If loading fails, it automatically falls back to network stream resolution.
 
+---
+
+## 11. Backend Facade, Performance & Cold-Start Recovery
+
+### 1. Unified Backend Facade (`createBackend()`)
+
+The `services` module acts as the application's composition root:
+- Instantiates all services with proper platform adapters or mock dependencies.
+- Exposes a typed facade `Backend` containing domain operations:
+  - Catalog browsing & search (`search`, `getHome`, `getAlbum`, `getArtist`, `getPlaylist`).
+  - Playback operations (`playback.setQueue`, `playback.play`, `playback.pause`, `playback.next`, `playback.seekTo`).
+  - Library management (`fetchUserPlaylists`, `fetchLikedSongs`, `setLiked`, `drainMutationQueue`).
+  - Offline downloads (`enqueueDownload`, `listDownloads`, `removeDownload`, `clearAllDownloads`).
+  - Synchronized lyrics (`getLyrics`).
+
+### 2. Parallel Backend WarmUp (`backend.warmUp()`)
+
+On mobile application cold launch, serial initialization causes noticeable UI latency. `warmUp()` executes critical subsystem initializations concurrently:
+1. `downloads.init()`: Pre-creates SQLite `downloads` table and reconciles interrupted downloads from previous sessions.
+2. `cache.init()`: Pre-creates SQLite `cache_entries` table.
+3. `library.queue.init()`: Pre-creates `pending_mutations` and `user_likes` SQLite tables.
+4. `innertube.getVisitorData()`: Restores persisted `visitorData` from `KeyValueStore`.
+5. `auth.getSession()`: Restores authenticated session chunks from `SecureStore`.
+6. `playback.restoreState()`: Restores persisted queue items and last playback position from `KeyValueStore`.
+
+### 3. YouTube CDN Download Throttle Bypass
+
+- **The Problem**: `googlevideo.com/videoplayback` un-ranged HTTP GET requests trigger a real-time playback pacing algorithm (~32.8 KB/s), causing a 4 MB audio file to take 122.8 seconds to download.
+- **The Solution**: Attaching an explicit `Range: bytes=0-${contentLength - 1}` header bypasses the pacing throttle, allowing the CDN to stream at full network capacity (~2.0 MB/s).
+- **Result**: 4,035,012 bytes download time drops from **122,875 ms to 2,013 ms** (60x speedup).
+
+### 4. Search Top-Result Pre-Resolution (<50ms Instant Play)
+
+- When `MusicRepository.search(query, { preResolveTopSearchResult: true })` executes, the #1 top track result is silently prefetched into the L1 in-memory stream cache in the background (non-blocking).
+- If the user taps the top track, `resolveStream(topTrack.id)` hits the in-memory cache immediately in **< 50ms**, eliminating the typical 200–1000ms stream resolution delay.
+
+
 
 
 

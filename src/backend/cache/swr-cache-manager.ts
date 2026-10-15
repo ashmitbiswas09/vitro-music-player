@@ -65,6 +65,15 @@ export class CacheManager {
   }
 
   /**
+   * Pre-initializes backing stores (e.g. SQLite tables).
+   */
+  async init(): Promise<void> {
+    if (this.sqlStore) {
+      await this.sqlStore.init();
+    }
+  }
+
+  /**
    * Retrieves an entry from cache (L1 memory or L2 SQLite), checking freshness vs staleness.
    * Guarantees return in sub-100ms.
    */

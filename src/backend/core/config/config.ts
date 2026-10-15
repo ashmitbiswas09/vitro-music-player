@@ -39,16 +39,57 @@ export interface AppConfig {
   cache: CacheConfig;
 }
 
+export const INNERTUBE_CLIENT_CONFIGS = {
+  WEB_REMIX: {
+    clientName: 'WEB_REMIX',
+    clientVersion: '1.20260101.01.00',
+    clientPlatform: 'DESKTOP',
+    clientNameHeader: '67',
+    origin: 'https://music.youtube.com',
+    referer: 'https://music.youtube.com/',
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  },
+  VISIONOS: {
+    clientName: 'VISIONOS',
+    clientVersion: '1.02',
+    clientPlatform: 'MOBILE',
+    clientNameHeader: '101',
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15',
+    extraClientContext: {
+      deviceMake: 'Apple',
+      deviceModel: 'RealityDevice17,1',
+      osName: 'visionOS',
+      osVersion: '26.5.23O471',
+    },
+  },
+  ANDROID_VR: {
+    clientName: 'ANDROID_VR',
+    clientVersion: '1.65.10',
+    clientPlatform: 'ANDROID',
+    clientNameHeader: '28',
+    userAgent:
+      'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+    extraClientContext: {
+      deviceMake: 'Oculus',
+      deviceModel: 'Quest 3',
+      androidSdkVersion: 32,
+      osName: 'Android',
+      osVersion: '12L',
+    },
+  },
+} as const;
+
 export const DEFAULT_INNERTUBE_CONFIG: InnertubeClientConfig = {
   baseUrl: 'https://music.youtube.com/youtubei/v1',
-  clientName: 'WEB_REMIX',
-  clientVersion: '1.20260101.01.00',
-  clientPlatform: 'DESKTOP',
-  clientNameHeader: '67',
-  origin: 'https://music.youtube.com',
-  referer: 'https://music.youtube.com/',
-  userAgent:
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  clientName: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.clientName,
+  clientVersion: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.clientVersion,
+  clientPlatform: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.clientPlatform,
+  clientNameHeader: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.clientNameHeader,
+  origin: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.origin,
+  referer: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.referer,
+  userAgent: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.userAgent,
   defaultLocale: 'en',
   defaultCountry: 'US',
   requestTimeoutMs: 15000,

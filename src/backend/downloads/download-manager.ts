@@ -84,6 +84,28 @@ export class DownloadManager {
       // Ignored if directory creation is managed automatically by FileStore
     }
 
+    // Reconcile interrupted downloads from a previous session
+    const staleRes = await this.db.query<DownloadRow>(
+      `SELECT * FROM downloads WHERE status = 'QUEUED' OR status = 'DOWNLOADING'`,
+    );
+    if (staleRes.ok && staleRes.value.length > 0) {
+      this.logger.warn(
+        `Found ${staleRes.value.length} interrupted download(s) from previous session. Reconciling to FAILED...`,
+      );
+      for (const row of staleRes.value) {
+        if (row.file_path) {
+          try {
+            await this.fileStore.delete(row.file_path);
+          } catch {
+            // Ignore if file doesn't exist
+          }
+        }
+      }
+      await this.db.execute(
+        `UPDATE downloads SET status = 'FAILED', error = 'Interrupted by app restart' WHERE status = 'QUEUED' OR status = 'DOWNLOADING'`,
+      );
+    }
+
     this.isInitialized = true;
     return ok(undefined);
   }
@@ -141,6 +163,19 @@ export class DownloadManager {
     }
     const destPath = `${this.downloadsDir}/${track.id}.${ext}`;
 
+    const downloadHeaders: Record<string, string> = {
+      ...resolved.requestHeaders,
+    };
+
+    // Bypass googlevideo.com real-time pacing throttle (~32.8 KB/s) by specifying explicit Range
+    if (stream.url.includes('googlevideo.com')) {
+      const rangeEnd =
+        stream.contentLength && stream.contentLength > 0
+          ? stream.contentLength - 1
+          : 104_857_600; // 100MB ceiling
+      downloadHeaders['Range'] = `bytes=0-${rangeEnd}`;
+    }
+
     this.logger.info(
       `Downloading binary audio for [${track.id}] via ${resolved.strategyName} (${stream.codec}, ${Math.round(stream.bitrate / 1000)}kbps) to ${destPath}...`,
     );
@@ -148,7 +183,7 @@ export class DownloadManager {
     const dlRes = await this.fileStore.downloadFile(
       stream.url,
       destPath,
-      resolved.requestHeaders,
+      downloadHeaders,
     );
 
     if (!dlRes.ok) {

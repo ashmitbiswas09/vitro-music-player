@@ -3,7 +3,7 @@
  * Impersonates Meta Quest 3 Android VR client context, returning direct, unencrypted HTTPS audio formats.
  */
 
-import type { AudioCodec, Clock, Logger } from '@/backend/core';
+import { INNERTUBE_CLIENT_CONFIGS, type AudioCodec, type Clock, type Logger } from '@/backend/core';
 import type { HttpClient } from '@/backend/platform';
 import { BaseInnertubeStreamStrategy } from './base-strategy';
 
@@ -15,21 +15,15 @@ export interface AndroidVrStrategyOptions {
 
 export class AndroidVrStreamStrategy extends BaseInnertubeStreamStrategy {
   constructor(httpClient: HttpClient, options: AndroidVrStrategyOptions = {}) {
+    const config = INNERTUBE_CLIENT_CONFIGS.ANDROID_VR;
     super(httpClient, {
       name: 'android_vr',
-      clientName: 'ANDROID_VR',
-      clientVersion: '1.65.10',
-      clientPlatform: 'ANDROID',
-      clientNameHeader: '28',
-      userAgent:
-        'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
-      extraClientContext: {
-        deviceMake: 'Oculus',
-        deviceModel: 'Quest 3',
-        androidSdkVersion: 32,
-        osName: 'Android',
-        osVersion: '12L',
-      },
+      clientName: config.clientName,
+      clientVersion: config.clientVersion,
+      clientPlatform: config.clientPlatform,
+      clientNameHeader: config.clientNameHeader,
+      userAgent: config.userAgent,
+      extraClientContext: config.extraClientContext,
       preferredCodecs: options.preferredCodecs,
       clock: options.clock,
       logger: options.logger,

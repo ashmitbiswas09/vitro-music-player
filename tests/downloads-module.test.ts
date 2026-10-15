@@ -273,6 +273,71 @@ describe('Phase 9: Downloads Module', () => {
       const downloaded = await failingManager.getDownloadedTrack(testTrack.id);
       expect(downloaded).toBeNull();
     });
+
+    it('reconciles interrupted stale DOWNLOADING and QUEUED rows on cold start', async () => {
+      // 1. Manually seed SQLite table with a stale DOWNLOADING row and dummy partial file
+      const partialFilePath = 'downloads/stale_track_1.webm';
+      await fileStore.write(partialFilePath, new Uint8Array([1, 2, 3, 4]));
+      const fileExistsBefore = await fileStore.exists(partialFilePath);
+      expect(fileExistsBefore.ok && fileExistsBefore.value).toBe(true);
+
+      await sqlDatabase.execute(`
+        CREATE TABLE IF NOT EXISTS downloads (
+          video_id TEXT PRIMARY KEY,
+          track_json TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL,
+          mime_type TEXT NOT NULL,
+          codec TEXT NOT NULL,
+          bitrate INTEGER NOT NULL,
+          downloaded_at INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          error TEXT
+        );
+      `);
+
+      await sqlDatabase.execute(
+        `INSERT INTO downloads (video_id, track_json, file_path, size_bytes, mime_type, codec, bitrate, downloaded_at, status, error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'stale_track_1',
+          JSON.stringify(testTrack),
+          partialFilePath,
+          4,
+          'audio/webm',
+          'opus',
+          160000,
+          Date.now(),
+          'DOWNLOADING',
+          null,
+        ],
+      );
+
+      // 2. Instantiate a fresh DownloadManager (simulating cold start restart)
+      const freshManager = new DownloadManager({
+        fileStore,
+        sqlDatabase,
+        streamResolver: mockStreamResolver,
+      });
+
+      // 3. Trigger init
+      await freshManager.init();
+
+      // 4. Verify partial file was deleted
+      const fileExistsAfter = await fileStore.exists(partialFilePath);
+      expect(fileExistsAfter.ok && fileExistsAfter.value).toBe(false);
+
+      // 5. Verify row was transitioned to FAILED with 'Interrupted by app restart'
+      const rowsRes = await sqlDatabase.query<{ status: string; error: string }>(
+        `SELECT status, error FROM downloads WHERE video_id = ?`,
+        ['stale_track_1'],
+      );
+      expect(rowsRes.ok).toBe(true);
+      if (rowsRes.ok) {
+        expect(rowsRes.value[0]?.status).toBe('FAILED');
+        expect(rowsRes.value[0]?.error).toBe('Interrupted by app restart');
+      }
+    });
   });
 
   describe('7. Offline-First Playback Integration (PlaybackService)', () => {

@@ -14,9 +14,9 @@ import {
   type Playlist,
   type Thumbnail,
   perf,
+  createLogger,
 } from '@/backend/core';
 import type { SearchFilter, SearchResponse, SearchResultItem } from '../types';
-
 import {
   isValidTrackId,
   isValidArtistId,
@@ -28,6 +28,7 @@ import {
 
 export { isValidTrackId, isValidArtistId, isValidAlbumId, isValidPlaylistId };
 
+const logger = createLogger({ prefix: 'SearchParser' });
 
 // Defensive Zod schemas targeting only consumed fields
 const ThumbnailItemSchema = z.object({
@@ -238,18 +239,26 @@ function extractMenuBrowseInfo(menu: unknown): {
 function parseItem(
   renderer: unknown,
   parentArtist?: { id?: string; name: string },
+  onDrop?: (reason: string) => void,
 ): SearchResultItem | null {
   const parseResult = ResponsiveListItemSchema.safeParse(renderer);
   if (!parseResult.success) {
+    onDrop?.('schema_validation_failed');
     return null;
   }
 
   const data = parseResult.data;
   const cols = data.flexColumns ?? [];
-  if (cols.length === 0) return null;
+  if (cols.length === 0) {
+    onDrop?.('missing_flex_columns');
+    return null;
+  }
 
   const titleRuns = cols[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs ?? [];
-  if (titleRuns.length === 0) return null;
+  if (titleRuns.length === 0) {
+    onDrop?.('missing_title');
+    return null;
+  }
 
   const title = titleRuns[0].text;
   const titleEndpoint = titleRuns[0].navigationEndpoint;
@@ -428,6 +437,7 @@ function parseItem(
     }
   }
 
+  onDrop?.('unrecognized_type_or_invalid_id');
   return null;
 }
 
@@ -436,6 +446,11 @@ export function parseSearchResponse(
   query: string,
   filter: SearchFilter = 'all',
 ): Result<SearchResponse, never> {
+  const dropCounts: Record<string, number> = {};
+  const recordDrop = (reason: string) => {
+    dropCounts[reason] = (dropCounts[reason] ?? 0) + 1;
+  };
+
   const { result: items, durationMs } = perf.measureSync('ParseSearch', () => {
     if (!rawBody || typeof rawBody !== 'object') {
       return [];
@@ -520,7 +535,7 @@ export function parseSearchResponse(
           for (const itemRenderer of cardShelf.contents) {
             const item = (itemRenderer as Record<string, unknown>).musicResponsiveListItemRenderer;
             if (item) {
-              const parsed = parseItem(item, cardArtist);
+              const parsed = parseItem(item, cardArtist, recordDrop);
               if (parsed) {
                 parsedItems.push(parsed);
               }
@@ -535,7 +550,7 @@ export function parseSearchResponse(
         for (const itemRenderer of shelf.contents) {
           const item = (itemRenderer as Record<string, unknown>).musicResponsiveListItemRenderer;
           if (item) {
-            const parsed = parseItem(item);
+            const parsed = parseItem(item, undefined, recordDrop);
             if (parsed) {
               parsedItems.push(parsed);
             }
@@ -549,7 +564,7 @@ export function parseSearchResponse(
         for (const itemRenderer of itemSection.contents) {
           const item = (itemRenderer as Record<string, unknown>).musicResponsiveListItemRenderer;
           if (item) {
-            const parsed = parseItem(item);
+            const parsed = parseItem(item, undefined, recordDrop);
             if (parsed) {
               parsedItems.push(parsed);
             }
@@ -580,6 +595,11 @@ export function parseSearchResponse(
 
     return uniqueItems;
   });
+
+  const totalDrops = Object.values(dropCounts).reduce((a, b) => a + b, 0);
+  if (totalDrops > 0) {
+    logger.debug(`Search response parsing dropped ${totalDrops} items`, dropCounts);
+  }
 
   const responseSizeBytes = JSON.stringify(rawBody).length;
 

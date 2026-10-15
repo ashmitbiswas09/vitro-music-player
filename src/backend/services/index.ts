@@ -111,9 +111,10 @@ export interface Backend {
     readonly sha1: Sha1Port;
     readonly audioEngine: AudioEngine;
   };
+  warmUp(): Promise<void>;
   search(
     query: string,
-    options?: SearchOptions & GetOrFetchOptions,
+    options?: SearchOptions & GetOrFetchOptions & { preResolveTopSearchResult?: boolean },
   ): Promise<Result<SearchResponse, AppError>>;
   resolveStream(
     videoId: string,
@@ -280,6 +281,16 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
       fileStore,
       sha1,
       audioEngine,
+    },
+    warmUp: async () => {
+      await Promise.all([
+        downloads.init(),
+        cache.init(),
+        library.queue.init(),
+        innertube.getVisitorData(),
+        auth.getSession(),
+        playback.restoreState(),
+      ]);
     },
     search: (query, options) => repository.search(query, options),
     resolveStream: (videoId, options) => repository.resolveStream(videoId, options),

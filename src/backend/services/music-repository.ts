@@ -101,19 +101,32 @@ export class MusicRepository {
 
   /**
    * Search with filter and query caching.
+   * Optionally pre-resolves top search result into stream cache for instant playback.
    */
   async search(
     query: string,
-    options: SearchOptions & GetOrFetchOptions = {},
+    options: SearchOptions & GetOrFetchOptions & { preResolveTopSearchResult?: boolean } = {},
   ): Promise<Result<SearchResponse, AppError>> {
     const scope = await this.resolveScope(options.scope);
     const key = CacheKeyBuilder.search(query, options.filter, scope);
-    return this.cache.getOrFetch(
+    const preResolve = options.preResolveTopSearchResult ?? true;
+
+    const result = await this.cache.getOrFetch(
       key,
       'search',
       () => this.innertube.search(query, options),
       { ...options, scope },
     );
+
+    if (preResolve && result.ok) {
+      const topTrack = result.value.items.find((item) => item.type === 'track');
+      if (topTrack && topTrack.type === 'track') {
+        // Silently prefetch stream in background (non-blocking)
+        this.resolveStream(topTrack.track.id).catch(() => {});
+      }
+    }
+
+    return result;
   }
 
   /**

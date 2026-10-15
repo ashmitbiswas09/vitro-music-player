@@ -3,7 +3,7 @@
  */
 
 import { z } from 'zod';
-import { ok, type Result, type AppError, perf } from '@/backend/core';
+import { ok, type Result, type AppError, perf, createLogger } from '@/backend/core';
 import type { HomeFeedResponse, HomeSection, SearchResultItem } from '../types';
 import {
   runsToText,
@@ -15,6 +15,8 @@ import {
   isValidAlbumId,
   isValidPlaylistId,
 } from './parser-utils';
+
+const logger = createLogger({ prefix: 'HomeParser' });
 
 const TwoRowItemSchema = z.object({
   title: z
@@ -32,18 +34,27 @@ const TwoRowItemSchema = z.object({
   thumbnailOverlay: z.unknown().optional(),
 });
 
-function parseCardItem(raw: unknown): SearchResultItem | null {
-  if (!raw || typeof raw !== 'object') return null;
+function parseCardItem(raw: unknown, onDrop?: (reason: string) => void): SearchResultItem | null {
+  if (!raw || typeof raw !== 'object') {
+    onDrop?.('not_an_object');
+    return null;
+  }
   const item = raw as Record<string, unknown>;
 
   const twoRow = item.musicTwoRowItemRenderer;
   if (twoRow) {
     const parsed = TwoRowItemSchema.safeParse(twoRow);
-    if (!parsed.success) return null;
+    if (!parsed.success) {
+      onDrop?.('schema_validation_failed');
+      return null;
+    }
     const { title: titleObj, subtitle: subtitleObj, thumbnailRenderer, navigationEndpoint, thumbnailOverlay } = parsed.data;
 
     const title = runsToText(titleObj?.runs);
-    if (!title) return null;
+    if (!title) {
+      onDrop?.('missing_title');
+      return null;
+    }
 
     const subtitle = runsToText(subtitleObj?.runs);
     const thumbnails = extractThumbnails(thumbnailRenderer);
@@ -96,12 +107,21 @@ function parseCardItem(raw: unknown): SearchResultItem | null {
         },
       };
     }
+
+    onDrop?.('unrecognized_item_type');
+    return null;
   }
 
+  onDrop?.('unsupported_renderer');
   return null;
 }
 
 export function parseHomeResponse(rawBody: unknown): Result<HomeFeedResponse, AppError> {
+  const dropCounts: Record<string, number> = {};
+  const recordDrop = (reason: string) => {
+    dropCounts[reason] = (dropCounts[reason] ?? 0) + 1;
+  };
+
   const { result: parsedData, durationMs } = perf.measureSync('ParseHomeFeed', () => {
     if (!rawBody || typeof rawBody !== 'object') {
       return { sections: [], continuationToken: undefined };
@@ -142,7 +162,7 @@ export function parseHomeResponse(rawBody: unknown): Result<HomeFeedResponse, Ap
           const items: SearchResultItem[] = [];
           if (Array.isArray(carousel.contents)) {
             for (const item of carousel.contents) {
-              const parsed = parseCardItem(item);
+              const parsed = parseCardItem(item, recordDrop);
               if (parsed) {
                 items.push(parsed);
               }
@@ -170,6 +190,11 @@ export function parseHomeResponse(rawBody: unknown): Result<HomeFeedResponse, Ap
 
     return { sections, continuationToken };
   });
+
+  const totalDrops = Object.values(dropCounts).reduce((a, b) => a + b, 0);
+  if (totalDrops > 0) {
+    logger.debug(`Home feed parsing dropped ${totalDrops} items`, dropCounts);
+  }
 
   const responseSizeBytes = JSON.stringify(rawBody).length;
 

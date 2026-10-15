@@ -7,6 +7,7 @@ import {
   type Result,
   type Clock,
   type Logger,
+  INNERTUBE_CLIENT_CONFIGS,
   SystemClock,
   createLogger,
   ok,
@@ -203,8 +204,8 @@ export class AuthService {
       const body = {
         context: {
           client: {
-            clientName: 'WEB_REMIX',
-            clientVersion: '1.20240101.01.00',
+            clientName: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.clientName,
+            clientVersion: INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.clientVersion,
             hl: 'en',
             gl: 'US',
           },
@@ -215,8 +216,7 @@ export class AuthService {
       const res = await this.httpClient.post<Record<string, unknown>>(url, body, {
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+          'User-Agent': INNERTUBE_CLIENT_CONFIGS.WEB_REMIX.userAgent,
           ...headersRes.value,
         },
         timeoutMs: 10000,

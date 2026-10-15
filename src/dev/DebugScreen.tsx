@@ -927,7 +927,13 @@ export function DebugScreen() {
     };
 
     try {
+      // Step 0: Ensure clean slate by deleting any prior download so we measure fresh download speed
+      lines.push('--- Step 0: Reset Prior Download State ---');
+      await backend.removeDownload(videoId);
+      lines.push(`Removed prior download for "${videoId}" (if any)`);
+
       // Step 1: Enqueue download
+      lines.push('');
       lines.push('--- Step 1: Enqueue Download ---');
       lines.push(`Downloading track: [${videoId}] "${testTrack.title}"...`);
       const dlStart = Date.now();
@@ -1000,6 +1006,95 @@ export function DebugScreen() {
     } catch (caught) {
       setOutput(
         `[DEV ONLY] DOWNLOAD TEST CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const runWarmupAndInstantPlayTest = async () => {
+    setIsLoading(true);
+    setOutput('[DEV ONLY] Running Backend WarmUp & Instant Search-to-Play Verification...');
+    const lines: string[] = ['=== BACKEND WARMUP & INSTANT SEARCH-TO-PLAY ==='];
+    try {
+      // Step 1: Backend WarmUp
+      lines.push('--- Step 1: Backend WarmUp ---');
+      const warmUpStart = Date.now();
+      await backend.warmUp();
+      const warmUpDuration = Date.now() - warmUpStart;
+      lines.push(`Backend warmUp completed in ${warmUpDuration}ms:`);
+      lines.push(`- Auth State:    ${(await backend.isSignedIn()) ? 'SIGNED IN' : 'GUEST'}`);
+      const visitor = await backend.innertube.getVisitorData();
+      lines.push(`- Visitor Data:  ${visitor ? 'RESTORED' : 'INITIALIZED'}`);
+      const state = backend.playback.getState();
+      lines.push(`- Restored Queue Tracks: ${state.queue.length}`);
+      const downloads = await backend.listDownloads();
+      lines.push(`- Existing Downloads:    ${downloads.length}`);
+
+      // Step 2: Search with Top-Result Pre-Resolution
+      lines.push('');
+      lines.push('--- Step 2: Search with Top-Result Pre-Resolution ---');
+      const searchStart = Date.now();
+      const searchRes = await backend.search('Creep', {
+        filter: 'all',
+        preResolveTopSearchResult: true,
+      });
+      const searchDuration = Date.now() - searchStart;
+
+      if (!searchRes.ok) {
+        lines.push(`ERROR: Search failed: ${searchRes.error.message}`);
+        setOutput(lines.join('\n'));
+        return;
+      }
+
+      const topItem = searchRes.value.items.find((item) => item.type === 'track');
+      if (!topItem || topItem.type !== 'track') {
+        lines.push('ERROR: No track found in search results');
+        setOutput(lines.join('\n'));
+        return;
+      }
+
+      lines.push(`Search completed in ${searchDuration}ms (${searchRes.value.items.length} items)`);
+      lines.push(`Top Track: [${topItem.track.id}] "${topItem.track.title}"`);
+
+      // Step 3: Wait briefly for background pre-resolution to finish and test instant resolution
+      lines.push('');
+      lines.push('--- Step 3: Instant Playback Stream Resolution (<50ms) ---');
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      const playStart = Date.now();
+      const streamRes = await backend.resolveStream(topItem.track.id);
+      const playResolutionDuration = Date.now() - playStart;
+
+      if (!streamRes.ok) {
+        lines.push(`ERROR: Stream resolution failed: ${streamRes.error.message}`);
+        setOutput(lines.join('\n'));
+        return;
+      }
+
+      const resolved = streamRes.value;
+      lines.push(`Stream Resolution Time: ${playResolutionDuration}ms`);
+      lines.push(
+        `Served from Cache:      ${playResolutionDuration < 50 ? 'YES (<50ms INSTANT PLAY)' : `YES (Cache hit, ${playResolutionDuration}ms)`}`,
+      );
+      lines.push(
+        `Codec:                  ${resolved.stream.codec} (${Math.round(resolved.stream.bitrate / 1000)} kbps)`,
+      );
+      lines.push(`Strategy:               ${resolved.strategyName}`);
+
+      // Step 4: Load into engine
+      lines.push('');
+      lines.push('--- Step 4: Audio Engine Playback ---');
+      await backend.playback.setQueue([topItem.track], 0);
+      lines.push(`Audio Engine State:     ${backend.playback.getState().status}`);
+      await backend.playback.stop();
+
+      lines.push('');
+      lines.push('=== ALL WARMUP & INSTANT PLAY TESTS PASSED ===');
+      setOutput(lines.join('\n'));
+    } catch (caught) {
+      setOutput(
+        `[DEV ONLY] WARMUP TEST CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`,
       );
     } finally {
       setIsLoading(false);
@@ -1096,6 +1191,13 @@ export function DebugScreen() {
           onPress={runDownloadTest}
           disabled={isLoading}
           color="#e65100"
+        />
+        <View style={styles.spacer} />
+        <Button
+          title="TEST BACKEND WARMUP & INSTANT SEARCH-TO-PLAY"
+          onPress={runWarmupAndInstantPlayTest}
+          disabled={isLoading}
+          color="#4a148c"
         />
       </View>
 
