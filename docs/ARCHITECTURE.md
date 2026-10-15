@@ -454,5 +454,76 @@ Platform-agnostic contract defined in `src/backend/playback-core/types.ts`:
   - `isAutoRadio`: `boolean`
 - **Security Rule**: Stream URLs are IP-bound and transient; they are **never included** in persistent storage. On cold start, `restorePersistedState()` reconstitutes the queue and settings, while streams are freshly resolved on demand.
 
+---
+
+## 11. Lyrics Module Architecture
+
+### Overview
+
+The lyrics module (`src/backend/lyrics`) provides synchronized and plain-text lyrics fetching, LRC format parsing, real-time active lyric line resolution via binary search, and multi-tier positive and negative caching.
+
+```mermaid
+flowchart TD
+    UI[UI / Mini-Player / Lyrics View] --> LyricsService[LyricsService]
+    LyricsService --> CacheCheck{Cache Check: lyrics:videoId}
+    
+    CacheCheck -->|Fresh Hit < 1ms| ReturnCached[Return Cached LyricsResult]
+    CacheCheck -->|Stale Hit| ReturnStale[Return Stale & Revalidate in Background]
+    CacheCheck -->|Miss| Lrclib[LrclibProvider]
+    
+    Lrclib --> ExactGet{GET /api/get?track&artist&duration}
+    ExactGet -->|200 OK| ParseLrc[parseLrc Parser]
+    ExactGet -->|404 Not Found| Clean[cleanTrackTitle]
+    Clean --> SearchFallback{GET /api/search?q=cleanTitle+artist}
+    
+    SearchFallback --> DurationMatch{Filter Candidates: |duration - target| <= 5s}
+    DurationMatch -->|Match Found| ParseLrc
+    DurationMatch -->|No Match| NegativeCache[Cache Empty Result: 1h TTL]
+    
+    ParseLrc --> CachePositive[Cache LyricsResult: 7d TTL in Memory & SQLite]
+    CachePositive --> ReturnResult[Return LyricsResult]
+    NegativeCache --> ReturnEmpty[Return LyricsResult syncType: NONE]
+```
+
+### 1. Domain Models & Active Line Resolution
+
+- **Models (`src/backend/lyrics/types.ts`)**:
+  - `LyricLine`: `{ startTimeMs: number; text: string; words?: { startTimeMs: number; text: string }[] }`
+  - `LyricsResult`: `{ videoId: string; source: 'LRCLIB' | 'INNERTUBE'; syncType: 'LINE_SYNCED' | 'PLAIN' | 'NONE'; syncedLines: LyricLine[]; plainText: string | null; instrumental: boolean }`
+- **Active Lyric Resolution (`getActiveLyricIndex`)**:
+  - Employs binary search $O(\log N)$ on sorted `syncedLines`.
+  - Given `positionMs`, returns the largest index $i$ such that `lines[i].startTimeMs <= positionMs`.
+  - Returns `-1` if playback position is prior to the first lyric line or if `syncedLines` is empty.
+  - Guarantees $60\text{ fps}$ smooth highlighting without scanning full lyric arrays on every position tick.
+
+### 2. Defensive LRC Format Parser (`parseLrc`)
+
+- **Format Compatibility**:
+  - Parses standard 2-digit centisecond timestamps (`[mm:ss.xx]`), 3-digit millisecond timestamps (`[mm:ss.xxx]`), and 1-digit tenth-second timestamps.
+  - Multi-timestamp support: Lines containing multiple timestamps (e.g., `[00:10.00][00:20.00] Chorus`) are expanded into discrete, individual `LyricLine` objects.
+  - Metadata tag parsing: Tags such as `[ar:Artist]`, `[ti:Title]`, `[al:Album]` are recorded into a `metadata` dictionary and stripped from lyrics lines.
+  - Timing offset: Supports `[offset:+/-ms]`, adjusting all timestamps accordingly and clamping timestamps to $\ge 0$.
+  - Chronological sorting: Enforces strict chronological order by `startTimeMs` regardless of source line arrangement.
+
+### 3. Track Title Cleaning & Provider Strategy (`LrclibProvider`)
+
+- **Noise Stripping (`cleanTrackTitle`)**:
+  - YouTube video titles frequently include video-specific or channel annotations that cause external lyric lookups to fail with 404.
+  - Strips annotations including: `(Official Video)`, `(Official Music Video)`, `[Official Audio]`, `(Visualizer)`, `(Lyrics)`, `(feat. ...)`, `ft. ...`, `(Remastered ...)`, and `(Live ...)`.
+- **LRCLIB Provider (`https://lrclib.net/api`)**:
+  - Primary lookup: `/api/get` with `track_name`, `artist_name`, `album_name`, and integer `duration`.
+  - Fallback lookup: On 404, queries `/api/search?q=<cleaned_title> <artist>`.
+  - Duration constraint: Candidates returned from search are filtered strictly within $\pm 5\text{ seconds}$ of the track's duration to prevent false matches on acoustic versions, covers, or unrelated songs with identical titles.
+  - Instrumental handling: Flags tracks marked `instrumental: true` with `syncType: NONE`.
+
+### 4. Two-Tier Positive & Negative Caching
+
+- **Cache Keys**: Built via `CacheKeyBuilder.lyrics(videoId)` $\to$ `lyrics:<videoId>`.
+- **Scope**: Public domain (`guest` scope); cached across all accounts and persisted to L2 SQLite.
+- **Positive Caching**: When valid lyrics (synced or plain) or confirmed instrumental metadata are returned, entries are cached with a **7-day fresh TTL** (`freshTtlMs: 604,800,000`, `staleTtlMs: 1,209,600,000`, `persistToSql: true`).
+- **Negative Caching**: If LRCLIB returns no match or 404, an empty `LyricsResult` (`syncType: 'NONE'`) is stored with a **1-hour fresh TTL** (`freshTtlMs: 3,600,000`, `staleTtlMs: 7,200,000`, `persistToSql: true`). This prevents redundant network round-trips for tracks without lyrics during repeated playback.
+- **Bypass**: Passing `forceRefresh: true` bypasses cache and queries LRCLIB directly.
+
+
 
 

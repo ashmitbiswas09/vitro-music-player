@@ -21,6 +21,7 @@ import { redactString, type Track } from '@/backend/core';
 import { CacheKeyBuilder } from '@/backend/cache';
 import { DefaultStreamResolver, AuthenticatedStreamStrategy } from '@/backend/streaming';
 import { FakeAudioEngine } from '@/backend/playback-core';
+import { getActiveLyricIndex } from '@/backend/lyrics';
 import { LoginModal } from './LoginModal';
 
 export function DebugScreen() {
@@ -752,15 +753,27 @@ export function DebugScreen() {
 
       // Step 2: Prefetch Verification
       logs.push('--- STEP 2: Prefetch Verification ---');
+      // Wait for background prefetch to settle into memory cache
       await new Promise((r) => setTimeout(r, 600));
       const nextTrack = playback.queue.getNextTrack();
       logs.push(`Next track in queue: [${nextTrack?.id}] "${nextTrack?.title}"`);
+      if (nextTrack) {
+        const prefetchStart = Date.now();
+        const prefetchCheck = await backend.streaming.resolve(nextTrack.id);
+        const prefetchDurationMs = Date.now() - prefetchStart;
+        const isWarmHit = prefetchDurationMs < 20;
+        logs.push(
+          `Prefetch Cache Check: ${prefetchCheck.ok ? 'HIT' : 'MISS'} (${prefetchDurationMs}ms, memory warm: ${isWarmHit ? 'YES' : 'NO'})`,
+        );
+      }
       logs.push('');
 
       // Step 3: next()
       logs.push('--- STEP 3: next() ---');
+      const nextStart = Date.now();
       await playback.next();
-      logs.push(`Current State: ${playback.getStatus().state}`);
+      const nextDurationMs = Date.now() - nextStart;
+      logs.push(`Current State: ${playback.getStatus().state} (advanced in ${nextDurationMs}ms)`);
       logs.push(
         `Playing Track: [${playback.getStatus().currentTrack?.id}] "${playback.getStatus().currentTrack?.title}"`,
       );
@@ -793,12 +806,103 @@ export function DebugScreen() {
       logs.push(`Current Track: [${playback.getStatus().currentTrack?.id}]`);
       logs.push('');
 
+      // Step 6: Cold-Start State Persistence & Restore
+      logs.push('--- STEP 6: Cold-Start State Persistence & Restore ---');
+      logs.push('Seeking to 45,000ms and stopping playback to simulate cold restart...');
+      await playback.seekTo(45000);
+      const preStopTrack = playback.getStatus().currentTrack;
+      await playback.stop();
+      logs.push(`State after stop: ${playback.getStatus().state}, Queue Length: ${playback.getStatus().queueLength}`);
+
+      logs.push('Restoring state from KeyValueStore persistence...');
+      const restoreSuccess = await playback.restoreState();
+      const restoredStatus = playback.getStatus();
+      logs.push(`Restore Success: ${restoreSuccess ? 'YES' : 'NO'}`);
+      logs.push(`Restored State: ${restoredStatus.state}`);
+      logs.push(
+        `Restored Track: [${restoredStatus.currentTrack?.id}] "${restoredStatus.currentTrack?.title}" (Index ${restoredStatus.currentIndex})`,
+      );
+      logs.push(`Restored Position: ${restoredStatus.positionMs}ms (Expected: 45000ms)`);
+      logs.push(
+        `Restoration Match: ${preStopTrack?.id === restoredStatus.currentTrack?.id && restoredStatus.positionMs === 45000 ? 'SUCCESS' : 'FAILED'}`,
+      );
+      logs.push('');
+
       // State Transitions Summary
       logs.push('--- STATE TRANSITIONS RECORDED ---');
-      stateLog.slice(-10).forEach((t) => logs.push(`  ${t}`));
+      stateLog.slice(-15).forEach((t) => logs.push(`  ${t}`));
 
       unsub();
       setOutput(logs.join('\n'));
+    } catch (caught) {
+      setOutput(
+        `[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`,
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const runLyricsTest = async () => {
+    setIsLoading(true);
+    setOutput('[DEV ONLY] Fetching Synced Lyrics from LRCLIB (Radiohead - Creep)...');
+    try {
+      const startTime = Date.now();
+      const res = await backend.getLyrics({
+        videoId: '9RfVp-GhKfs',
+        trackTitle: 'Creep',
+        artistName: 'Radiohead',
+        durationSeconds: 239,
+      });
+      const durationMs = Date.now() - startTime;
+
+      if (!res.ok) {
+        setOutput(`[DEV ONLY] Failed to fetch lyrics: ${res.error.message}`);
+        return;
+      }
+
+      const lyrics = res.value;
+      const lines = [
+        '=== LRCLIB & LRC PARSER TEST ===',
+        `Track:         Radiohead - Creep [${lyrics.videoId}]`,
+        `Source:        ${lyrics.source}`,
+        `Sync Type:     ${lyrics.syncType}`,
+        `Instrumental:  ${lyrics.instrumental ? 'YES' : 'NO'}`,
+        `Network Time:  ${durationMs}ms`,
+        `Synced Lines:  ${lyrics.syncedLines.length}`,
+        '',
+        '--- FIRST 3 TIMESTAMPED LINES ---',
+      ];
+
+      if (lyrics.syncedLines.length > 0) {
+        for (let i = 0; i < Math.min(lyrics.syncedLines.length, 3); i++) {
+          const line = lyrics.syncedLines[i];
+          const min = Math.floor(line.startTimeMs / 60000);
+          const sec = Math.floor((line.startTimeMs % 60000) / 1000);
+          const ms = Math.floor((line.startTimeMs % 1000) / 10);
+          const ts = `[${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(ms).padStart(2, '0')}]`;
+          lines.push(`  Line ${i + 1}: ${ts} "${line.text}"`);
+        }
+
+        // Test getActiveLyricIndex at positionMs = 60,000 (1:00)
+        const testPosMs = 60000;
+        const activeIdx = getActiveLyricIndex(lyrics.syncedLines, testPosMs);
+        lines.push('');
+        lines.push('--- ACTIVE LYRIC INDEX TEST ---');
+        lines.push(`Target Position: ${testPosMs}ms (01:00.00)`);
+        lines.push(`Active Line Index: ${activeIdx}`);
+        if (activeIdx >= 0 && activeIdx < lyrics.syncedLines.length) {
+          const activeLine = lyrics.syncedLines[activeIdx];
+          lines.push(`Active Line Text:  "${activeLine.text}" (${activeLine.startTimeMs}ms)`);
+        }
+      } else if (lyrics.plainText) {
+        lines.push('(Plain lyrics only):');
+        lines.push(lyrics.plainText.slice(0, 150) + '...');
+      } else {
+        lines.push('(No lyrics text found)');
+      }
+
+      setOutput(lines.join('\n'));
     } catch (caught) {
       setOutput(
         `[DEV ONLY] CRITICAL ERROR:\n${caught instanceof Error ? caught.message : String(caught)}`,
@@ -882,6 +986,13 @@ export function DebugScreen() {
           onPress={runPlaybackCoreTest}
           disabled={isLoading}
           color="#00695c"
+        />
+        <View style={styles.spacer} />
+        <Button
+          title="TEST LYRICS (LRCLIB + LRC PARSER)"
+          onPress={runLyricsTest}
+          disabled={isLoading}
+          color="#ad1457"
         />
       </View>
 

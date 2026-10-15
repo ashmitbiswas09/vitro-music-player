@@ -44,6 +44,8 @@ Commands:
   cache [stats|clear|clear-user|inspect <key>|invalidate <videoId>|test <query>]
                       Inspect cache hits, misses, timings, clear multi-tier or user-scoped cache, or run cold vs warm benchmark.
   whoami              Report current authentication status (never prints cookies or email).
+  lyrics <videoId_or_query>
+                      Fetch synchronized LRC or plain text lyrics from LRCLIB with 7-day caching.
   help, --help, -h    Show this help menu
 
 Examples:

@@ -12,7 +12,8 @@ export type CacheDataType =
   | 'playlist'
   | 'stream'
   | 'suggest'
-  | 'library';
+  | 'library'
+  | 'lyrics';
 
 export interface CachePolicy {
   /** Duration in ms that cached data is considered fresh (returned immediately without revalidation) */
@@ -62,6 +63,11 @@ export const DEFAULT_CACHE_POLICIES: Record<CacheDataType, CachePolicy> = {
   library: {
     freshTtlMs: 10 * 60 * 1000, // 10 minutes
     staleTtlMs: 24 * 60 * 60 * 1000, // 24 hours
+    persistToSql: true,
+  },
+  lyrics: {
+    freshTtlMs: 7 * 24 * 60 * 60 * 1000, // 7 days
+    staleTtlMs: 14 * 24 * 60 * 60 * 1000, // 14 days
     persistToSql: true,
   },
 };
@@ -184,11 +190,14 @@ export const CacheKeyBuilder = {
     const cont = continuation ? `:continuation:${continuation}` : '';
     return `auth:${cleanScope}:library:history${cont}`;
   },
+  lyrics(videoId: string): string {
+    return `lyrics:${videoId}`;
+  },
 };
 
 export const CacheEntrySchema = z.object({
   key: z.string().min(1),
-  dataType: z.enum(['home', 'search', 'album', 'artist', 'playlist', 'stream', 'suggest', 'library']),
+  dataType: z.enum(['home', 'search', 'album', 'artist', 'playlist', 'stream', 'suggest', 'library', 'lyrics']),
   value: z.unknown(),
   scope: z.string().default('guest'),
   createdAt: z.number().nonnegative(),

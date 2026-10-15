@@ -21,6 +21,10 @@ Measured performance metrics on the Android emulator (Pixel 8 / API 35) using Re
 | **Mutation Queue Persistence** | **~1–4 ms** | SQLite (`pending_mutations`) | Local write/read for optimistic likes and playlist edits |
 | **Playback Queue State Operations** | **< 1 ms** | Memory | Headless state machine (next, prev, shuffle, repeat) |
 | **Playback State Cold-Start Restore** | **~1–2 ms** | Storage | Reconstitute queue and playback position from KeyValueStore |
+| **Lyrics: LRCLIB Network Fetch** | **~200–500 ms** | Network | REST lookup via `/api/get` or `/api/search` with duration matching |
+| **Lyrics: Active Line Binary Search** | **< 0.05 ms** | Memory | $O(\log N)$ binary search on sorted timestamped lines |
+| **Lyrics: L1 Cache Hit** | **< 0.1 ms** | L1 Memory (LRU) | Sub-millisecond in-memory lyrics return |
+| **Lyrics: L2 SQLite Cold Read** | **~5–10 ms** | L2 SQLite (`expo-sqlite`) | Read persisted parsed lyrics from disk on cold start |
 
 ## Evolution Across Phases
 
@@ -35,9 +39,16 @@ Measured performance metrics on the Android emulator (Pixel 8 / API 35) using Re
 - **Phase 7 (Playback Core Module)**:
   - Headless queue manager & audio engine contract.
   - In-memory queue operations (< 1 ms). Stream prefetch ahead (1-2 tracks) eliminates latency between track transitions.
-  - Automatic HTTP 403 recovery with stream cache invalidation and single-retry re-resolution.
+  - Automatic HTTP 403 recovery with stream cache invalidation and single-retry re-resolution (suppressing premature ERROR flashes).
   - Pre-playback stream expiry check (< 60s) guaranteeing valid playback URLs.
+  - Monotonic request generation counter guarding against rapid-skip race conditions.
+  - Throttled position persistence (<= 1 write per 5000ms).
   - Cold-start playback state restoration (~1-2 ms) from `KeyValueStore` without persisting IP-bound URLs.
+- **Phase 8 (Lyrics Module)**:
+  - Synced and plain-text lyrics via LRCLIB with automatic YouTube title cleaning.
+  - Sub-millisecond $O(\log N)$ active line resolution (`getActiveLyricIndex`) enabling $60\text{ fps}$ scrolling without re-scanning arrays.
+  - Defensive LRC format parser handling standard/3-digit ms, multi-timestamps, metadata tags, and offsets.
+  - 7-day positive caching in L1 Memory and L2 SQLite (`guest` scope) and 1-hour negative caching for missing lyrics.
 
 *This baseline is updated after each phase to track performance evolution and detect regressions.*
 

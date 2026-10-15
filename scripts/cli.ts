@@ -20,6 +20,7 @@ import {
   handleSuggest,
   handleCache,
   handleWhoami,
+  handleLyrics,
 } from './commands';
 
 const coldStartBegin = performance.now();
@@ -165,6 +166,11 @@ async function main(): Promise<void> {
     }
     case 'whoami': {
       timingDetails = await handleWhoami();
+      break;
+    }
+    case 'lyrics': {
+      const queryOrId = args.slice(1).join(' ').trim();
+      timingDetails = await handleLyrics(queryOrId);
       break;
     }
     default:

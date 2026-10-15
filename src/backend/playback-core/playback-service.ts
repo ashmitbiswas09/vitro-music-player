@@ -52,6 +52,12 @@ export class PlaybackService {
   // Track error retry tracking (prevents infinite 403 reload loops)
   private retriedVideoIds = new Set<string>();
 
+  // Monotonically increasing request counter to guard against rapid skips & slow in-flight resolutions
+  private loadRequestId = 0;
+
+  // Throttle timestamp for position change persistence to storage (at most once every 5000ms)
+  private lastPositionSaveTime = 0;
+
   // Status change listeners
   private readonly statusListeners = new Set<(status: PlaybackStatus) => void>();
 
@@ -107,12 +113,24 @@ export class PlaybackService {
 
   private setupAudioEngineListeners(): void {
     this.audioEngine.onStateChange((engineState: AudioEngineState) => {
+      if (engineState === 'ERROR') {
+        // Suppress direct engine ERROR emission; handleAudioEngineError will
+        // evaluate recoverability and transition to ERROR only if retries are exhausted or unrecoverable.
+        return;
+      }
       this.setState(engineState);
     });
 
     this.audioEngine.onPositionChange((pos: number) => {
       this.currentPositionMs = pos;
       this.notifyStatus();
+
+      // Throttle KeyValueStore persistence to at most once per 5000ms during active playback
+      const now = this.clock.now();
+      if (now - this.lastPositionSaveTime >= 5000) {
+        this.lastPositionSaveTime = now;
+        this.saveState().catch(() => {});
+      }
     });
 
     this.audioEngine.onTrackEnded(async () => {
@@ -129,6 +147,7 @@ export class PlaybackService {
   async setQueue(tracks: Track[], startIndex = 0): Promise<Result<void, AppError>> {
     this.queueManager.setQueue(tracks, startIndex);
     this.retriedVideoIds.clear();
+    this.lastPositionSaveTime = this.clock.now();
     await this.saveState();
     this.notifyStatus();
 
@@ -151,6 +170,7 @@ export class PlaybackService {
   async pause(): Promise<Result<void, AppError>> {
     const res = await this.audioEngine.pause();
     if (res.ok) {
+      this.lastPositionSaveTime = this.clock.now();
       await this.saveState();
     }
     return res;
@@ -164,10 +184,12 @@ export class PlaybackService {
   }
 
   async seekTo(positionMs: number): Promise<Result<void, AppError>> {
+    this.currentPositionMs = positionMs;
     const res = await this.audioEngine.seekTo(positionMs);
     if (res.ok) {
-      this.currentPositionMs = positionMs;
+      this.lastPositionSaveTime = this.clock.now();
       await this.saveState();
+      this.notifyStatus();
     }
     return res;
   }
@@ -177,9 +199,12 @@ export class PlaybackService {
   }
 
   async stop(): Promise<Result<void, AppError>> {
+    ++this.loadRequestId;
     const res = await this.audioEngine.stop();
     this.setState('IDLE');
     this.currentPositionMs = 0;
+    this.lastPositionSaveTime = this.clock.now();
+    await this.saveState();
     return res;
   }
 
@@ -270,6 +295,7 @@ export class PlaybackService {
   // --- Core Playback Execution ---
 
   private async loadAndPlayCurrent(forceFresh = false): Promise<Result<void, AppError>> {
+    const requestId = ++this.loadRequestId;
     const track = this.queueManager.getCurrentTrack();
     if (!track) {
       this.setState('IDLE');
@@ -284,6 +310,13 @@ export class PlaybackService {
     this.logger.info(`Resolving audio stream for "${track.id}" (${track.title})...`);
     let res = await this.streamResolver.resolve(track.id, { forceFresh });
 
+    if (requestId !== this.loadRequestId) {
+      this.logger.debug(
+        `Discarding stale load request #${requestId} for "${track.id}" (current: #${this.loadRequestId})`,
+      );
+      return ok(undefined);
+    }
+
     if (!res.ok) {
       this.logger.error(`Failed to resolve stream for track "${track.id}": ${res.error.message}`);
       this.setState('ERROR');
@@ -296,6 +329,12 @@ export class PlaybackService {
       this.logger.info(`Resolved stream for "${track.id}" is expiring within 60s. Refreshing...`);
       await this.streamResolver.invalidateStream?.(track.id);
       res = await this.streamResolver.resolve(track.id, { forceFresh: true });
+
+      if (requestId !== this.loadRequestId) {
+        this.logger.debug(`Discarding stale load request #${requestId} after stream refresh`);
+        return ok(undefined);
+      }
+
       if (!res.ok) {
         this.setState('ERROR');
         return err(res.error);
@@ -316,6 +355,10 @@ export class PlaybackService {
 
     // 4. Load into AudioEngine with critical request headers
     const loadRes = await this.audioEngine.load(stream.url, requestHeaders, metadata);
+    if (requestId !== this.loadRequestId) {
+      this.logger.debug(`Discarding stale load request #${requestId} after engine load`);
+      return ok(undefined);
+    }
     if (!loadRes.ok) {
       this.setState('ERROR');
       return loadRes;
@@ -323,12 +366,17 @@ export class PlaybackService {
 
     // 5. Play
     const playRes = await this.audioEngine.play();
+    if (requestId !== this.loadRequestId) {
+      this.logger.debug(`Discarding stale load request #${requestId} after engine play`);
+      return ok(undefined);
+    }
     if (!playRes.ok) {
       this.setState('ERROR');
       return playRes;
     }
 
     this.setState('PLAYING');
+    this.lastPositionSaveTime = this.clock.now();
     await this.saveState();
 
     // 6. Trigger prefetching for next 1-2 tracks
@@ -355,14 +403,20 @@ export class PlaybackService {
       return;
     }
 
-    const is403 = error.statusCode === 403 || error.message.includes('403');
+    const is403 =
+      error.statusCode === 403 ||
+      error.message.includes('403') ||
+      error.statusCode === 401 ||
+      error.message.includes('401');
     const isNetworkOrAuth = error.isNetworkOrAuthError || is403;
 
     if (isNetworkOrAuth && !this.retriedVideoIds.has(track.id)) {
       this.logger.warn(
-        `AudioEngine encountered network/auth error (HTTP 403). Retrying track "${track.id}" once...`,
+        `AudioEngine encountered network/auth error (HTTP 403/401). Retrying track "${track.id}" once...`,
       );
       this.retriedVideoIds.add(track.id);
+      // Suppress premature ERROR emission by transitioning directly to LOADING
+      this.setState('LOADING');
       await this.streamResolver.invalidateStream?.(track.id);
       const retryRes = await this.loadAndPlayCurrent(true);
       if (retryRes.ok) {

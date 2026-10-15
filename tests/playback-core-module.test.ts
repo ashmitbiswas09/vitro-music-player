@@ -380,6 +380,9 @@ describe('Phase 7: Playback Core Module', () => {
         clock,
       });
 
+      const observedStates: string[] = [];
+      recoverService.onStatusChange((s) => observedStates.push(s.state));
+
       await recoverService.setQueue(sampleTracks, 0);
       expect(engine.loadedUrl).toContain('attempt=1');
 
@@ -397,6 +400,109 @@ describe('Phase 7: Playback Core Module', () => {
       expect(track1Resolves).toBe(2);
       expect(engine.loadedUrl).toContain('attempt=2');
       expect(recoverService.getStatus().state).toBe('PLAYING');
+
+      // CRITICAL: Ensure ERROR state was never flashed to listeners during recoverable 403 retry
+      expect(observedStates).not.toContain('ERROR');
+      expect(observedStates).toContain('LOADING');
+      expect(observedStates[observedStates.length - 1]).toBe('PLAYING');
+    });
+
+    it('guards against rapid-skip race conditions with monotonic request generation counter', async () => {
+      let resolveTrack1Deferred: () => void = () => {};
+      const slowFirstStrategy: StreamStrategy = {
+        name: 'slow-first',
+        resolve: async (videoId: string) => {
+          if (videoId === sampleTracks[0].id) {
+            // Delay track 0 until after user skips
+            await new Promise<void>((resolve) => {
+              resolveTrack1Deferred = resolve;
+            });
+          }
+          return ok({
+            stream: {
+              url: `https://googlevideo.com/${videoId}`,
+              mimeType: 'audio/webm; codecs="opus"',
+              codec: 'opus',
+              bitrate: 150000,
+              formatId: '251',
+              expiresAt: clock.now() + 3600_000,
+            },
+            requestHeaders: {},
+            strategyName: 'slow-first',
+          });
+        },
+      };
+
+      const raceResolver = new DefaultStreamResolver({
+        httpClient,
+        clock,
+        minRequestDelayMs: 0,
+        strategies: [slowFirstStrategy],
+      });
+
+      const raceService = new PlaybackService({
+        audioEngine: engine,
+        streamResolver: raceResolver,
+        clock,
+      });
+
+      // Start loading track 0 (in-flight resolution hangs)
+      const loadPromise = raceService.setQueue(sampleTracks, 0);
+
+      // User immediately skips to track 1
+      await raceService.next();
+
+      // Track 1 resolves and loads into audio engine
+      expect(raceService.getStatus().currentTrack?.id).toBe(sampleTracks[1].id);
+      expect(engine.loadedUrl).toContain(sampleTracks[1].id);
+
+      // Now track 0's slow resolution finishes
+      resolveTrack1Deferred();
+      await loadPromise;
+
+      // Ensure Track 0 did NOT overwrite Track 1 or hijack playback
+      expect(raceService.getStatus().currentTrack?.id).toBe(sampleTracks[1].id);
+      expect(engine.loadedUrl).toContain(sampleTracks[1].id);
+    });
+
+    it('throttles onPositionChange persistence to KeyValueStore to at most once per 5000ms', async () => {
+      let storageSetCalls = 0;
+      const trackingStorage: MemoryKeyValueStore = new MemoryKeyValueStore();
+      const origSet = trackingStorage.set.bind(trackingStorage);
+      trackingStorage.set = async <T = string>(key: string, val: T) => {
+        if (key === 'playback:state') storageSetCalls++;
+        return origSet(key, val);
+      };
+
+      const throttleService = new PlaybackService({
+        audioEngine: engine,
+        streamResolver: resolver,
+        storage: trackingStorage,
+        clock,
+      });
+
+      await throttleService.setQueue([sampleTracks[0]], 0);
+      const initialSets = storageSetCalls; // baseline from setQueue & loadAndPlayCurrent
+
+      // Emit 10 position updates within 3 seconds (each 300ms apart)
+      for (let i = 1; i <= 10; i++) {
+        clock.advance(300);
+        engine.emitPosition(i * 300);
+      }
+
+      // Should have 0 additional storage writes because < 5000ms has elapsed
+      expect(storageSetCalls - initialSets).toBe(0);
+
+      // Advance clock past 5000ms threshold and emit position
+      clock.advance(2100); // 3000ms + 2100ms = 5100ms >= 5000ms
+      engine.emitPosition(5100);
+
+      // Now exactly 1 throttled write occurs
+      expect(storageSetCalls - initialSets).toBe(1);
+
+      // Pause immediately writes without waiting for 5000ms
+      await throttleService.pause();
+      expect(storageSetCalls - initialSets).toBe(2);
     });
 
     it('triggers prefetching for upcoming tracks into stream cache', async () => {

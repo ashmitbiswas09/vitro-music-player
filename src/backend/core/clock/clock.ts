@@ -44,6 +44,10 @@ export class TestClock implements Clock {
     this.currentTime += ms;
   }
 
+  advance(ms: number): void {
+    this.advanceBy(ms);
+  }
+
   setTime(epochMs: number): void {
     this.currentTime = epochMs;
   }

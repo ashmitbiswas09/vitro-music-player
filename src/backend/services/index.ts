@@ -64,6 +64,11 @@ import {
   FakeAudioEngine,
   type AudioEngine,
 } from '@/backend/playback-core';
+import {
+  LyricsService,
+  type LyricsResult,
+  type LyricsSearchQuery,
+} from '@/backend/lyrics';
 import type { Result, AppError, StreamError, AuthError, Clock } from '@/backend/core';
 import { MusicRepository } from './music-repository';
 
@@ -91,6 +96,7 @@ export interface Backend {
   readonly auth: AuthService;
   readonly library: LibraryService;
   readonly playback: PlaybackService;
+  readonly lyrics: LyricsService;
   readonly adapters: {
     readonly httpClient: HttpClient;
     readonly secureStore: SecureStore;
@@ -151,6 +157,7 @@ export interface Backend {
   removeTrackToPlaylist(playlistId: string, videoId: string, setVideoId?: string): Promise<Result<OptimisticMutationResult, AppError>>;
   removeTrackFromPlaylist(playlistId: string, videoId: string, setVideoId?: string): Promise<Result<OptimisticMutationResult, AppError>>;
   drainMutationQueue(): Promise<Result<{ processed: number; remaining: number }, AppError>>;
+  getLyrics(query: LyricsSearchQuery, options?: { forceRefresh?: boolean }): Promise<Result<LyricsResult, AppError>>;
 }
 
 export function createBackend(adapters: BackendAdapters = {}): Backend {
@@ -224,6 +231,12 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     clock,
   });
 
+  const lyrics = new LyricsService({
+    httpClient,
+    cacheManager: cache,
+    clock,
+  });
+
   return {
     repository,
     cache,
@@ -233,6 +246,7 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     auth,
     library,
     playback,
+    lyrics,
     adapters: {
       httpClient,
       secureStore,
@@ -269,5 +283,6 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     removeTrackToPlaylist: (playlistId, videoId, setVideoId) => library.removeTrackToPlaylist(playlistId, videoId, setVideoId),
     removeTrackFromPlaylist: (playlistId, videoId, setVideoId) => library.removeTrackFromPlaylist(playlistId, videoId, setVideoId),
     drainMutationQueue: () => library.drainQueue(),
+    getLyrics: (query, options) => lyrics.getLyrics(query, options),
   };
 }

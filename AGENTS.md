@@ -28,6 +28,12 @@ This is an Expo/React Native mobile application. Prioritize mobile-first pattern
   - Background prefetching pre-resolves the next 1-2 upcoming tracks into stream cache on track load.
   - Queue continuation (`innertube.getNext`) extends the queue automatically when reaching the end if `autoRadio` is enabled.
   - Playback state (queue, originalQueue, index, position, repeat/shuffle) persists to storage for cold-start restoration without persisting IP-bound stream URLs.
+- **Lyrics Architecture**:
+  - `LyricsService` integrates LRCLIB (`/api/get` with fallback to `/api/search` picking closest duration within +/- 5s).
+  - Noisy YouTube video titles are automatically cleaned (stripping suffixes like `(Official Video)`, `[Official Audio]`, `feat. ...`).
+  - LRC format parser handles standard/3-digit ms timestamps, multi-timestamps, metadata tags, and `[offset:+/-ms]`.
+  - Active line resolution uses binary search (`getActiveLyricIndex`) returning current active lyric index at given `positionMs`.
+  - Caches lyrics in `CacheManager` (L1 memory + L2 SQLite) with a 7-day TTL (`guest` scope) and negative caching (1-hour TTL) for tracks with no lyrics.
 - **Dependency Rules**:
   - Before adding ANY native or Expo package, ask the user first and justify it in one line.
   - Install only SDK-compatible packages with `npx expo install <package>`.
