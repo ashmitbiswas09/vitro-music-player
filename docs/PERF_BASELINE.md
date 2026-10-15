@@ -27,9 +27,9 @@ Measured performance metrics on the Android emulator (Pixel 8 / API 35) using Re
 | **Lyrics: L2 SQLite Cold Read** | **~5–10 ms** | L2 SQLite (`expo-sqlite`) | Read persisted parsed lyrics from disk on cold start |
 | **Offline Track Resolution (Downloaded)** | **0 ms** | Local Disk / FileStore | Instant local file playback, bypassing network stream resolution entirely |
 | **Download Record SQLite Query** | **< 2 ms** | L2 SQLite (`expo-sqlite`) | Retrieve offline track metadata, status, and local file path |
-| **Unthrottled Download Speed (4.03 MB)** | **~2.0 s** (~2013 ms) | Network (Ranged GET) | 60x speedup from 122.8s un-ranged pacing throttle bypass |
-| **Backend WarmUp (`warmUp()`)** | **~10–30 ms** | SQLite + Storage | Parallel table initialization, auth restore, queue restore, download reconciliation |
-| **Instant Search-to-Play Resolution** | **< 50 ms** | L1 Memory (Pre-Resolved) | Silent background pre-resolution of #1 top search result |
+| **Unthrottled Download Speed (3.85 MB / 4,035,012 B)** | **~1,086 ms** (Emulator) / **~2,014 ms** (CLI) | Network (Ranged GET) | 113x speedup on emulator vs 122,875 ms un-ranged pacing throttle bypass |
+| **Backend WarmUp (`warmUp()`)** | **~250 ms** (Emulator) | SQLite + Storage | Parallel table initialization, auth restore, visitorData restore, queue restore, download reconciliation |
+| **Instant Search-to-Play Resolution** | **0 ms** (Emulator) | L1 Memory (Pre-Resolved) | Silent background pre-resolution of #1 top search result (<50 ms target surpassed) |
 
 ## Evolution Across Phases
 
@@ -61,10 +61,10 @@ Measured performance metrics on the Android emulator (Pixel 8 / API 35) using Re
   - Atomically synchronized physical file deletion and SQLite record purging on track removal and full download cache clearing.
   - Best-effort lyrics pre-caching during download ensuring synchronized lyrics are available offline in SQLite cache.
 - **Phase 10 (Backend Polish, Latency Optimization & Cold Start)**:
-  - Bypassed YouTube CDN real-time pacing throttle on downloads via explicit HTTP `Range: bytes=0-${contentLength - 1}` headers, dropping 4.03 MB download time from 122,875 ms to 2,013 ms (60x speedup).
+  - Bypassed YouTube CDN real-time pacing throttle on downloads via explicit HTTP `Range: bytes=0-${contentLength - 1}` headers, dropping 3.85 MB (4,035,012 bytes) download time from 122,875 ms to 1,086 ms on emulator (113x speedup) and 2,014 ms in CLI.
   - Stale `DOWNLOADING` and `QUEUED` state recovery on cold start: automatically cleans up partial disk files and marks interrupted downloads as `FAILED` on launch.
-  - `Backend.warmUp()` initializes SQLite tables, restores session, visitorData, queue state, and reconciles interrupted downloads in parallel on launch.
-  - Search top-result stream pre-resolution (`preResolveTopSearchResult: true`) prefetches the #1 search result into L1 memory cache for instant (< 50 ms) playback when tapped.
+  - `Backend.warmUp()` completes in 250 ms on Android emulator, initializing SQLite tables, restoring session, visitorData, queue state, and reconciling interrupted downloads in parallel on launch.
+  - Search top-result stream pre-resolution (`preResolveTopSearchResult: true`) prefetches the #1 search result into L1 memory cache, achieving 0 ms instant playback resolution on the emulator.
   - Redacting logger observability for dropped malformed items across InnerTube parsers.
   - Centralized InnerTube client constants in `src/backend/core/config/config.ts`.
 

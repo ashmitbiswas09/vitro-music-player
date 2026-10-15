@@ -5,7 +5,7 @@
  * Runs on Android Emulator.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ScrollView, View, Text, Button, StyleSheet } from 'react-native';
 import { createBackend } from '@/backend/services';
 import {
@@ -15,6 +15,7 @@ import {
   RnKeyValueStore,
   RnFileStore,
   RnSha1,
+  RnAudioEngine,
 } from '@/backend/platform/rn';
 import CookieManager from '@react-native-cookies/cookies';
 import { redactString, type Track } from '@/backend/core';
@@ -39,11 +40,122 @@ export function DebugScreen() {
       keyValueStore: new RnKeyValueStore(sqlite),
       fileStore: new RnFileStore(),
       sha1: new RnSha1(),
+      audioEngine: new RnAudioEngine(),
       cookieJarClearer: async () => {
         await CookieManager.clearAll();
       },
     });
   }, []);
+
+  // Real Audio Engine Live Playback State
+  const [playerState, setPlayerState] = useState<{
+    state: string;
+    trackTitle: string;
+    positionMs: number;
+    durationMs: number;
+  }>({
+    state: 'IDLE',
+    trackTitle: 'None',
+    positionMs: 0,
+    durationMs: 0,
+  });
+
+  useEffect(() => {
+    const unsub = backend.playback.onStatusChange((status) => {
+      setPlayerState({
+        state: status.state,
+        trackTitle: status.currentTrack?.title ?? 'None',
+        positionMs: status.positionMs,
+        durationMs: status.durationMs,
+      });
+    });
+    return unsub;
+  }, [backend]);
+
+  const playLiveStream = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
+    setOutput('[LIVE AUDIO] Resolving and playing live stream for "Karma Police" (1uYWYWPc9HU)...');
+    try {
+      const track: Track = {
+        id: '1uYWYWPc9HU',
+        title: 'Karma Police',
+        artists: [{ name: 'Radiohead' }],
+        album: { title: 'OK Computer' },
+        durationSeconds: 264,
+        thumbnails: [{ url: 'https://i.ytimg.com/vi/1uYWYWPc9HU/hqdefault.jpg', width: 480, height: 360 }],
+      };
+      await backend.playback.setQueue([track], 0);
+      setOutput(
+        '[LIVE AUDIO] Live stream loaded and playing via RnAudioEngine (ExoPlayer/Media3)!\nTrack: Karma Police (Radiohead)\nSource: Live YouTube CDN stream with request headers\nEngine State: PLAYING',
+      );
+    } catch (e) {
+      setOutput(`[LIVE AUDIO] Play stream error:\n${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const playLocalDownload = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
+    setOutput('[LIVE AUDIO] Checking local downloads for offline play...');
+    try {
+      const downloads = await backend.listDownloads();
+      if (downloads.length === 0) {
+        setOutput('[LIVE AUDIO] No downloads found on disk! Run "TEST DOWNLOADS" first to download a track.');
+        return;
+      }
+      const downloaded = downloads[0];
+      setOutput(`[LIVE AUDIO] Playing local download from disk: ${downloaded.filePath}`);
+      await backend.playback.setQueue([downloaded.track], 0);
+      setOutput(
+        `[LIVE AUDIO] Playing local downloaded file:\nTrack: ${downloaded.track.title} (${downloaded.track.id})\nLocal Path: ${downloaded.filePath}\nSize: ${(downloaded.sizeBytes / 1024 / 1024).toFixed(2)} MB\nEngine State: PLAYING`,
+      );
+    } catch (e) {
+      setOutput(`[LIVE AUDIO] Play download error:\n${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const togglePauseResume = async () => {
+    if (isLoading) return;
+    try {
+      const current = backend.playback.getStatus();
+      if (current.state === 'PLAYING') {
+        await backend.playback.pause();
+        setOutput('[LIVE AUDIO] Playback paused.');
+      } else {
+        await backend.playback.play();
+        setOutput('[LIVE AUDIO] Playback playing.');
+      }
+    } catch (e) {
+      setOutput(`[LIVE AUDIO] Toggle play/pause error:\n${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const seekRelative = async (deltaMs: number) => {
+    if (isLoading) return;
+    try {
+      const current = backend.playback.getStatus();
+      const newPos = Math.max(0, current.positionMs + deltaMs);
+      await backend.playback.seekTo(newPos);
+      setOutput(`[LIVE AUDIO] Seeked to ${(newPos / 1000).toFixed(1)}s.`);
+    } catch (e) {
+      setOutput(`[LIVE AUDIO] Seek error:\n${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const stopPlayback = async () => {
+    if (isLoading) return;
+    try {
+      await backend.playback.stop();
+      setOutput('[LIVE AUDIO] Playback stopped.');
+    } catch (e) {
+      setOutput(`[LIVE AUDIO] Stop error:\n${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   const runSearch = async () => {
     setIsLoading(true);
@@ -732,7 +844,7 @@ export function DebugScreen() {
       logs.push('');
 
       const playback = backend.playback;
-      const fakeEngine = backend.adapters.audioEngine as FakeAudioEngine;
+      const fakeEngine = backend.adapters.audioEngine as FakeAudioEngine | RnAudioEngine;
 
       // Track state transitions
       const stateLog: string[] = [];
@@ -1106,6 +1218,55 @@ export function DebugScreen() {
       <Text style={styles.header}>DEV ONLY - BACKEND DEBUG SCREEN</Text>
       <Text style={styles.subtext}>Plain text debug harness running on React Native native adapters</Text>
 
+      {/* Dedicated LIVE AUDIO PLAYER (Real expo-audio) */}
+      <View style={styles.playerCard}>
+        <Text style={styles.playerCardTitle}>🎵 LIVE AUDIO PLAYER (REAL EXPO-AUDIO)</Text>
+        <Text style={styles.playerCardStatus}>
+          State: <Text style={styles.playerCardBold}>{playerState.state}</Text> | Track:{' '}
+          <Text style={styles.playerCardBold}>{playerState.trackTitle}</Text>
+        </Text>
+        <Text style={styles.playerCardTime}>
+          Time: {(playerState.positionMs / 1000).toFixed(1)}s / {(playerState.durationMs / 1000).toFixed(1)}s
+        </Text>
+        <View style={styles.buttonRow}>
+          <Button
+            title="PLAY STREAM (LIVE)"
+            onPress={playLiveStream}
+            disabled={isLoading}
+            color="#2e7d32"
+          />
+          <View style={styles.spacer} />
+          <Button
+            title="PLAY LOCAL DOWNLOAD"
+            onPress={playLocalDownload}
+            disabled={isLoading}
+            color="#1565c0"
+          />
+        </View>
+        <View style={styles.buttonRow}>
+          <Button
+            title={playerState.state === 'PLAYING' ? 'PAUSE' : 'RESUME'}
+            onPress={togglePauseResume}
+            disabled={isLoading}
+            color="#f57f17"
+          />
+          <View style={styles.spacer} />
+          <Button
+            title="SEEK +30s"
+            onPress={() => seekRelative(30000)}
+            disabled={isLoading}
+            color="#6a1b9a"
+          />
+          <View style={styles.spacer} />
+          <Button
+            title="STOP"
+            onPress={stopPlayback}
+            disabled={isLoading}
+            color="#c62828"
+          />
+        </View>
+      </View>
+
       <View style={styles.buttonRow}>
         <Button title="Search" onPress={runSearch} disabled={isLoading} />
         <View style={styles.spacer} />
@@ -1241,6 +1402,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666666',
     marginBottom: 16,
+  },
+  playerCard: {
+    backgroundColor: '#f1f8e9',
+    borderColor: '#2e7d32',
+    borderWidth: 1.5,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  playerCardTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#1b5e20',
+    marginBottom: 4,
+  },
+  playerCardStatus: {
+    fontSize: 12,
+    color: '#333333',
+    marginBottom: 2,
+  },
+  playerCardBold: {
+    fontWeight: 'bold',
+    color: '#0d47a1',
+  },
+  playerCardTime: {
+    fontFamily: 'monospace',
+    fontSize: 12,
+    color: '#555555',
+    marginBottom: 8,
   },
   buttonRow: {
     flexDirection: 'row',

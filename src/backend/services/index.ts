@@ -16,6 +16,7 @@ import {
   type SqlDatabase,
   type FileStore,
   type Sha1Port,
+  type AudioEngine,
 } from '@/backend/platform';
 import {
   AuthService,
@@ -62,7 +63,6 @@ import {
 import {
   PlaybackService,
   FakeAudioEngine,
-  type AudioEngine,
 } from '@/backend/playback-core';
 import {
   LyricsService,

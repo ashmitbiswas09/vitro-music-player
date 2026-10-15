@@ -6,10 +6,6 @@
 export const PLAYBACK_CORE_MODULE_NAME = 'playback-core' as const;
 
 export type {
-  AudioEngine,
-  AudioEngineState,
-  AudioEngineError,
-  AudioTrackMetadata,
   PlaybackCoreState,
   PlaybackRepeatMode,
   PersistedPlaybackState,

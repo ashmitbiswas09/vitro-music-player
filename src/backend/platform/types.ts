@@ -3,7 +3,51 @@
  * Domain modules interact solely through these abstractions.
  */
 
-import type { Result, NetworkError, StorageError } from '@/backend/core';
+import type { Result, NetworkError, StorageError, AppError } from '@/backend/core';
+
+export type AudioEngineState =
+  | 'IDLE'
+  | 'LOADING'
+  | 'BUFFERING'
+  | 'PLAYING'
+  | 'PAUSED'
+  | 'ENDED'
+  | 'ERROR';
+
+export interface AudioTrackMetadata {
+  id: string;
+  title: string;
+  artist: string;
+  album?: string;
+  durationSeconds?: number;
+  artworkUrl?: string;
+}
+
+export interface AudioEngineError {
+  message: string;
+  statusCode?: number;
+  code?: string;
+  isNetworkOrAuthError?: boolean;
+}
+
+export interface AudioEngine {
+  load(url: string, headers: Record<string, string>, metadata: AudioTrackMetadata): Promise<Result<void, AppError>>;
+  play(): Promise<Result<void, AppError>>;
+  pause(): Promise<Result<void, AppError>>;
+  seekTo(positionMs: number): Promise<Result<void, AppError>>;
+  setVolume(volume: number): Promise<Result<void, AppError>>;
+  stop(): Promise<Result<void, AppError>>;
+
+  getPosition(): Promise<number>;
+  getDuration(): Promise<number>;
+  getState(): AudioEngineState;
+
+  // Subscriptions
+  onStateChange(cb: (state: AudioEngineState) => void): () => void;
+  onPositionChange(cb: (positionMs: number) => void): () => void;
+  onTrackEnded(cb: () => void): () => void;
+  onError(cb: (error: AudioEngineError) => void): () => void;
+}
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD';
 

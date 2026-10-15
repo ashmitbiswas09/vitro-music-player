@@ -345,8 +345,12 @@ export class PlaybackService {
               { error: loadRes.error.message },
             );
           } else {
-            const playRes = await this.audioEngine.play();
             if (requestId !== this.loadRequestId) return ok(undefined);
+            const playRes = await this.audioEngine.play();
+            if (requestId !== this.loadRequestId) {
+              await this.audioEngine.pause();
+              return ok(undefined);
+            }
 
             if (!playRes.ok) {
               this.setState('ERROR');
@@ -425,9 +429,14 @@ export class PlaybackService {
     }
 
     // 5. Play
+    if (requestId !== this.loadRequestId) {
+      this.logger.debug(`Discarding stale load request #${requestId} before engine play`);
+      return ok(undefined);
+    }
     const playRes = await this.audioEngine.play();
     if (requestId !== this.loadRequestId) {
       this.logger.debug(`Discarding stale load request #${requestId} after engine play`);
+      await this.audioEngine.pause();
       return ok(undefined);
     }
     if (!playRes.ok) {
