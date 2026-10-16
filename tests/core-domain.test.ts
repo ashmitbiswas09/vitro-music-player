@@ -17,7 +17,9 @@ describe('Core Domain Models & Defensive Parsing', () => {
     expect(parsed.id).toBe('video_123');
     expect(parsed.title).toBe('Creep');
     expect(parsed.artists).toEqual([]);
-    expect(parsed.thumbnails).toEqual([]);
+    expect(parsed.thumbnails).toEqual([
+      { url: 'https://i.ytimg.com/vi/video_123/hqdefault.jpg' },
+    ]);
     expect(durationMs).toBeGreaterThanOrEqual(0);
   });
 

@@ -105,3 +105,9 @@ export interface InnertubeClientOptions {
   authService?: AuthService;
   authSession?: AuthSession;
 }
+
+export interface AccountProfile {
+  name: string;
+  handle?: string;
+  avatarUrl?: string;
+}

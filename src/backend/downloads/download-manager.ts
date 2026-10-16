@@ -168,12 +168,14 @@ export class DownloadManager {
     };
 
     // Bypass googlevideo.com real-time pacing throttle (~32.8 KB/s) by specifying explicit Range
-    if (stream.url.includes('googlevideo.com')) {
-      const rangeEnd =
-        stream.contentLength && stream.contentLength > 0
-          ? stream.contentLength - 1
-          : 104_857_600; // 100MB ceiling
-      downloadHeaders['Range'] = `bytes=0-${rangeEnd}`;
+    if (
+      stream.url.includes('googlevideo.com') &&
+      typeof stream.contentLength === 'number' &&
+      Number.isFinite(stream.contentLength) &&
+      stream.contentLength > 0 &&
+      stream.contentLength < 50_000_000
+    ) {
+      downloadHeaders['Range'] = `bytes=0-${stream.contentLength - 1}`;
     }
 
     this.logger.info(
@@ -396,6 +398,13 @@ export class DownloadManager {
         title: 'Unknown Track',
         artists: [],
         thumbnails: [],
+      };
+    }
+
+    if (track.thumbnails.length === 0 && track.id) {
+      track = {
+        ...track,
+        thumbnails: [{ url: `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg` }],
       };
     }
 

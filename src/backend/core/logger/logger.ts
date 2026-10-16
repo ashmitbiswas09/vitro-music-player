@@ -253,7 +253,7 @@ function defaultLogHandler(level: LogLevel, message: string, context?: LogContex
 
   switch (level) {
     case 'error':
-      console.error(out);
+      console.warn(out);
       break;
     case 'warn':
       console.warn(out);

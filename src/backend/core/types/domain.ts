@@ -33,7 +33,13 @@ export const TrackSchema = z.object({
   thumbnails: z.array(ThumbnailSchema).default([]),
   isExplicit: z.boolean().optional(),
   isLive: z.boolean().optional(),
-});
+}).transform((track) => ({
+  ...track,
+  thumbnails:
+    track.thumbnails.length > 0
+      ? track.thumbnails
+      : [{ url: `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg` }],
+}));
 export type Track = z.infer<typeof TrackSchema>;
 
 export const ArtistSchema = z.object({

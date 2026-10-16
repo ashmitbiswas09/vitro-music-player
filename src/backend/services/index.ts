@@ -35,6 +35,7 @@ import {
   type SearchSuggestionsResponse,
   type EndpointOptions,
   type NextOptions,
+  type AccountProfile,
 } from '@/backend/innertube';
 import {
   DefaultStreamResolver,
@@ -155,6 +156,7 @@ export interface Backend {
   validateSession(): Promise<Result<boolean, AuthError>>;
   logout(): Promise<Result<void, AuthError>>;
   isSignedIn(): Promise<boolean>;
+  fetchAccountProfile(): Promise<Result<AccountProfile, AppError>>;
   fetchUserPlaylists(options?: LibraryFetchOptions): Promise<Result<UserPlaylistsResult, AppError>>;
   fetchLikedSongs(options?: LibraryFetchOptions): Promise<Result<LikedSongsResult, AppError>>;
   fetchHistory(options?: LibraryFetchOptions): Promise<Result<HistoryResult, AppError>>;
@@ -311,6 +313,7 @@ export function createBackend(adapters: BackendAdapters = {}): Backend {
     validateSession: () => auth.validateSession(),
     logout: () => auth.logout(),
     isSignedIn: () => auth.isSignedIn(),
+    fetchAccountProfile: () => innertube.fetchAccountProfile(),
     fetchUserPlaylists: (options) => library.fetchUserPlaylists(options),
     fetchLikedSongs: (options) => library.fetchLikedSongs(options),
     fetchHistory: (options) => library.fetchHistory(options),

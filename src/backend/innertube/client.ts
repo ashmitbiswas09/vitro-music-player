@@ -12,7 +12,9 @@ import {
   createLogger,
   retryAsync,
   isRetryableError,
+  AuthError,
 } from '@/backend/core';
+import { z } from 'zod';
 import type { HttpClient } from '@/backend/platform';
 import type {
   SearchFilter,
@@ -28,6 +30,7 @@ import type {
   ContinuationResponse,
   EndpointOptions,
   InnertubeClientOptions,
+  AccountProfile,
 } from './types';
 import type { AuthSession, AuthService } from '@/backend/auth';
 import { ContextBuilder } from './context/context-builder';
@@ -58,6 +61,23 @@ const SEARCH_FILTER_PARAMS: Record<SearchFilter, string | undefined> = {
   playlists: 'EgWKAQIoAWoKEAkQChAKEAUQEQ%3D%3D',
   videos: 'EgWKAQIQAWoKEAkQChAKEAUQEQ%3D%3D',
 };
+
+function findActiveAccountHeader(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findActiveAccountHeader(item);
+      if (found !== undefined) return found;
+    }
+  } else if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if ('activeAccountHeaderRenderer' in record) return record.activeAccountHeaderRenderer;
+    for (const item of Object.values(record)) {
+      const found = findActiveAccountHeader(item);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
 
 export class InnertubeClient {
   private readonly httpClient: HttpClient;
@@ -104,6 +124,43 @@ export class InnertubeClient {
 
   async resetVisitorData(): Promise<void> {
     await this.visitorManager.resetVisitorData();
+  }
+
+  async fetchAccountProfile(): Promise<Result<AccountProfile, AppError>> {
+    if (!this.authService) {
+      return { ok: false, error: new AuthError('No active authentication session', 'MISSING_SESSION') };
+    }
+    const authHeaders = await this.authService.getAuthHeaders(this.config.origin);
+    if (!authHeaders.ok) return authHeaders;
+
+    const raw = await this.postEndpoint('account/account_menu', {}, {});
+    if (!raw.ok) return raw;
+    const renderer = findActiveAccountHeader(raw.value);
+    const profileSchema = z.object({
+      accountName: z.union([z.string(), z.object({ simpleText: z.string().optional(), runs: z.object({ text: z.string() }).array().optional() })]).optional(),
+      channelHandle: z.union([z.string(), z.object({ simpleText: z.string().optional(), runs: z.object({ text: z.string() }).array().optional() })]).optional(),
+      accountPhoto: z.object({ thumbnails: z.array(z.object({ url: z.string().url() })) }).optional(),
+    });
+    const parsed = profileSchema.safeParse(renderer);
+    if (!parsed.success) {
+      return { ok: false, error: new AppError('Invalid account profile response', 'PARSE_ERROR') };
+    }
+    const textValue = (value: unknown): string | undefined => {
+      if (typeof value === 'string') return value;
+      if (!value || typeof value !== 'object') return undefined;
+      const item = value as { simpleText?: string; runs?: { text: string }[] };
+      return item.simpleText ?? item.runs?.map((run) => run.text).join('');
+    };
+    const name = textValue(parsed.data.accountName)?.trim();
+    if (!name) return { ok: false, error: new AppError('Account profile name is missing', 'PARSE_ERROR') };
+    return {
+      ok: true,
+      value: {
+        name,
+        handle: textValue(parsed.data.channelHandle)?.trim() || undefined,
+        avatarUrl: parsed.data.accountPhoto?.thumbnails.at(-1)?.url,
+      },
+    };
   }
 
   private async postEndpoint(
