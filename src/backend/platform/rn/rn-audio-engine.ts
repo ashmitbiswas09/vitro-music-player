@@ -37,6 +37,7 @@ export class RnAudioEngine implements AudioEngine {
   private currentDurationMs = 0;
   private volume = 1.0;
   private hasFiredEndedForCurrentTrack = false;
+  private hasRefreshedLockScreenMetadata = false;
 
   // Listeners
   private readonly stateListeners = new Set<(state: AudioEngineState) => void>();
@@ -145,6 +146,7 @@ export class RnAudioEngine implements AudioEngine {
     this.currentPositionMs = 0;
     this.currentDurationMs = (metadata.durationSeconds ?? 0) * 1000;
     this.hasFiredEndedForCurrentTrack = false;
+    this.hasRefreshedLockScreenMetadata = false;
     this.setState('LOADING');
 
     const isRemote = url.startsWith('http://') || url.startsWith('https://');
@@ -228,6 +230,35 @@ export class RnAudioEngine implements AudioEngine {
     }
     if (typeof status.duration === 'number' && status.duration > 0) {
       this.currentDurationMs = this.secondsToMs(status.duration);
+    }
+
+    // Refresh lock screen metadata once duration is resolved by native player
+    if (
+      status.isLoaded &&
+      typeof status.duration === 'number' &&
+      status.duration > 0 &&
+      !this.hasRefreshedLockScreenMetadata
+    ) {
+      this.hasRefreshedLockScreenMetadata = true;
+      try {
+        if (typeof this.player.updateLockScreenMetadata === 'function') {
+          this.player.updateLockScreenMetadata({
+            title: this.currentMetadata?.title,
+            artist: this.currentMetadata?.artist,
+            albumTitle: this.currentMetadata?.album,
+            artworkUrl: this.currentMetadata?.artworkUrl,
+          });
+        } else if (typeof this.player.setActiveForLockScreen === 'function') {
+          this.player.setActiveForLockScreen(true, {
+            title: this.currentMetadata?.title,
+            artist: this.currentMetadata?.artist,
+            albumTitle: this.currentMetadata?.album,
+            artworkUrl: this.currentMetadata?.artworkUrl,
+          });
+        }
+      } catch {
+        // Non-fatal lock screen refresh
+      }
     }
 
     // 1. Check for player error

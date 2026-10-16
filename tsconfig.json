@@ -5,7 +5,9 @@
     "paths": {
       "@/backend": ["./src/backend/index.ts"],
       "@/backend/*": ["./src/backend/*"],
-      "@/scripts/*": ["./scripts/*"]
+      "@/scripts/*": ["./scripts/*"],
+      "@/ui/*": ["./src/ui/*"],
+      "@/dev/*": ["./src/dev/*"]
     }
   }
 }
